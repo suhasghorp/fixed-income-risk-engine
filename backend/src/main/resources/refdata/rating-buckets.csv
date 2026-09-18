@@ -1,0 +1,7 @@
+# Rating Buckets: each (rating, sector) pair has its own Sector Factor, an OU process around
+# this long-run mean. An issuer's spread is Systemic + its bucket's Sector + its Idiosyncratic Factor.
+rating,sector,sectorLongRunMeanBp
+A,Industrials,25
+BBB,Industrials,70
+A,Financials,35
+BBB,Financials,85

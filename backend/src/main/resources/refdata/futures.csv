@@ -1,0 +1,12 @@
+# Treasury futures contract specs. Each contract lists the synthetic Proxy Bonds a CTD Switch
+# moves between; the first row of a contract is its initial CTD. The Proxy Bonds are fictional notes whose
+# maturities sit inside the contract's real deliverable range (ZN: 6.5-10y remaining, ZF: 4y2m-5y3m, from
+# the first day of the delivery month). Conversion factors follow the CME formula at a 6% yield, as of
+# 2026-12-01.
+contract,description,proxyId,coupon,datedDate,maturityDate,conversionFactor
+ZNZ6,ZN Dec26 10Y note future,ZNZ6-CTD1,4.125,2023-08-15,2033-08-15,0.9003
+ZNZ6,ZN Dec26 10Y note future,ZNZ6-CTD2,4.250,2023-11-15,2033-11-15,0.9040
+ZNZ6,ZN Dec26 10Y note future,ZNZ6-CTD3,4.000,2024-02-15,2034-02-15,0.8870
+ZFZ6,ZF Dec26 5Y note future,ZFZ6-CTD1,3.875,2026-03-31,2031-03-31,0.9212
+ZFZ6,ZF Dec26 5Y note future,ZFZ6-CTD2,4.000,2026-04-30,2031-04-30,0.9259
+ZFZ6,ZF Dec26 5Y note future,ZFZ6-CTD3,3.750,2026-06-30,2031-06-30,0.9124

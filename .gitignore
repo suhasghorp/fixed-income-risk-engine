@@ -1,0 +1,21 @@
+# Backend
+backend/target/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Editors / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Private notes: kept in this folder, versioned only by the separate notes repository
+# (git --git-dir=$HOME/.fixed-income-risk-notes.git --work-tree=.), never published here.
+/CONTEXT.md
+/CLAUDE.md
+/docs/
+/.scratch/
+/fixed-income-risk-simulator-design.md
+/.claude/

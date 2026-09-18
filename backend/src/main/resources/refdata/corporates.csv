@@ -1,0 +1,9 @@
+# Fictional corporate bonds: fixed semi-annual coupons, 30/360 US accrual, priced off the Treasury curve
+# plus their issuer's Mark.
+bondId,issuerId,coupon,datedDate,maturityDate
+ACME-4.85-2031,ACME,4.850,2024-06-15,2031-06-15
+ACME-5.30-2036,ACME,5.300,2026-03-01,2036-03-01
+BOREAL-5.10-2029,BOREAL,5.100,2024-10-01,2029-10-01
+BOREAL-5.75-2034,BOREAL,5.750,2024-04-15,2034-04-15
+CASCADE-4.95-2030,CASCADE,4.950,2025-01-20,2030-01-20
+DELMAR-5.60-2032,DELMAR,5.600,2025-07-15,2032-07-15

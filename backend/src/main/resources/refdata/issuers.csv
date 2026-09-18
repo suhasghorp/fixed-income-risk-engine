@@ -1,0 +1,8 @@
+# Fictional corporate issuers, with how liquid their bonds are. Prints and Quotes arrive as
+# Poisson processes (per year; 1500/yr is about 4 per simulated day) and reveal the Latent Spread plus noise.
+# Acme and Delmar are illiquid: their Marks drift from the truth between Prints.
+issuerId,name,rating,sector,idiosyncraticMeanBp,printsPerYear,printNoiseBp,quotesPerYear,quoteNoiseBp
+ACME,Acme Industries,A,Industrials,10,60,1.5,250,6
+BOREAL,Boreal Manufacturing,BBB,Industrials,5,1500,1,3000,4
+CASCADE,Cascade Financial,A,Financials,0,1500,1,3000,4
+DELMAR,Delmar Logistics,BBB,Industrials,20,40,2,200,8
