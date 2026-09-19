@@ -19,3 +19,6 @@ frontend/dist/
 /.scratch/
 /fixed-income-risk-simulator-design.md
 /.claude/
+
+# Third-party reference PDFs kept locally for fact-checking, not redistributed
+*.pdf
