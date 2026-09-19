@@ -4,7 +4,7 @@ A working, real-time fixed income risk engine: a simulated market anchored to th
 a Book of Treasuries, Treasury futures, corporate bonds and interest rate swaps, and an engine that
 reprices that Book selectively as the market moves and streams risk to a browser.
 
-It is the running example for the article series **[Building a Fixed Income Risk Engine](https://suhasghorp.github.io)**:
+It is the running example for the article series **[Building a Fixed Income Risk Engine](https://suhasghorp.github.io/fixed-income-risk/)**:
 *how real-time risk works, and a working engine to prove it.*
 
 ## What it shows
