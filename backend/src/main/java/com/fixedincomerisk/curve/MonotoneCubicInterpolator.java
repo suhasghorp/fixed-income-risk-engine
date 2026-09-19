@@ -3,9 +3,9 @@ package com.fixedincomerisk.curve;
 import java.util.Arrays;
 
 /**
- * Shape-preserving piecewise cubic Hermite interpolation (Fritsch–Carlson / PCHIP slopes).
- * Monotone data stays monotone, linear data is reproduced exactly, and the first derivative
- * is continuous.
+ * Piecewise cubic Hermite interpolation with PCHIP slopes: a weighted harmonic mean of the neighbouring
+ * secants, zero where the data turns, so every segment meets Fritsch and Carlson's monotonicity conditions.
+ * Monotone data stays monotone, linear data is reproduced exactly, and the first derivative is continuous.
  */
 final class MonotoneCubicInterpolator {
 
