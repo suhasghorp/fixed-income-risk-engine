@@ -18,7 +18,7 @@ class RepricingEngineTest {
     private static final RiskFactorId TEN_YEAR = RiskFactorId.pillarZeroRate("USD", Pillar.parse("10Y"));
     private static final RiskFactorId VALUATION_DATE = RiskFactorId.valuationDate("USD");
 
-    private final RepricingEngine engine = new RepricingEngine(new MaterialityThresholds(1, 1, 1, 0.02, 0, 0));
+    private final RepricingEngine engine = new RepricingEngine(new MaterialityThresholds(1, 1, 1, 0.02, 0, 0, 0));
 
     /** A flat curve at {@code rate}. */
     private static MarketState flat(double rate) {

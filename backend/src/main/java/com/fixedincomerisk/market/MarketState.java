@@ -20,15 +20,23 @@ import java.util.TreeSet;
  * @param credit  the observable credit market and the Marks (never Latent Spreads)
  * @param fixings the floating index's recorded Fixings
  * @param fx      the simulated FX market: spot per pair, and Forward Points for the non-deliverable ones
+ * @param vols    the quoted Normal Volatility at each Surface Point
  */
 public record MarketState(LocalDate valuationDate, Map<String, YieldCurve> curves,
                           Map<String, FuturesMarket> futures, CreditMarket credit, Fixings fixings,
-                          FxMarket fx) {
+                          FxMarket fx, VolMarket vols) {
 
     public MarketState {
         // LinkedHashMap, not Map.copyOf: currency order decides the order risk is reported in.
         curves = Collections.unmodifiableMap(new LinkedHashMap<>(curves));
         futures = Map.copyOf(futures);
+    }
+
+    /** A market with no volatility surface: every Instrument that has one is priced from curves alone. */
+    public MarketState(LocalDate valuationDate, Map<String, YieldCurve> curves,
+                       Map<String, FuturesMarket> futures, CreditMarket credit, Fixings fixings,
+                       FxMarket fx) {
+        this(valuationDate, curves, futures, credit, fixings, fx, VolMarket.NONE);
     }
 
     /** A market with no FX. */
@@ -69,12 +77,17 @@ public record MarketState(LocalDate valuationDate, Map<String, YieldCurve> curve
 
     /** The same market with other Fixings. */
     public MarketState withFixings(Fixings newFixings) {
-        return new MarketState(valuationDate, curves, futures, credit, newFixings, fx);
+        return new MarketState(valuationDate, curves, futures, credit, newFixings, fx, vols);
     }
 
     /** The same market with another FX market: used to bump spot or points with everything else fixed. */
     public MarketState withFx(FxMarket newFx) {
-        return new MarketState(valuationDate, curves, futures, credit, fixings, newFx);
+        return new MarketState(valuationDate, curves, futures, credit, fixings, newFx, vols);
+    }
+
+    /** The same market with another volatility surface: used to bump a Surface Point for Vega. */
+    public MarketState withVols(VolMarket newVols) {
+        return new MarketState(valuationDate, curves, futures, credit, fixings, fx, newVols);
     }
 
     /**
@@ -86,7 +99,7 @@ public record MarketState(LocalDate valuationDate, Map<String, YieldCurve> curve
         if (bumped.put(currency, newCurve) == null) {
             throw noMarketFor(currency);
         }
-        return new MarketState(valuationDate, bumped, futures, credit, fixings, fx);
+        return new MarketState(valuationDate, bumped, futures, credit, fixings, fx, vols);
     }
 
     private IllegalArgumentException noMarketFor(String currency) {
@@ -95,7 +108,7 @@ public record MarketState(LocalDate valuationDate, Map<String, YieldCurve> curve
 
     /** The same market with every Mark shifted by {@code shift}: used to bump spreads for CS01. */
     public MarketState withMarksShiftedBy(double shift) {
-        return new MarketState(valuationDate, curves, futures, credit.withMarksShiftedBy(shift), fixings, fx);
+        return new MarketState(valuationDate, curves, futures, credit.withMarksShiftedBy(shift), fixings, fx, vols);
     }
 
     public double mark(String issuerId) {
@@ -135,10 +148,56 @@ public record MarketState(LocalDate valuationDate, Map<String, YieldCurve> curve
             case SECTOR -> credit.sector(factor.name());
             case RATING -> credit.ratingIndex(factor.name());
             case BASIS -> futures(factor.name()).basis();
+            case NORMAL_VOL -> vols.normalVol(factor.currency(), factor.name());
             case PROXY_BOND -> futures(factor.name()).proxyIndex();
             case VALUATION_DATE -> valuationDate.toEpochDay();
             case FX_SPOT, NDF_POINTS -> throw new IllegalStateException("handled above");
         };
+    }
+
+    /**
+     * The quoted volatility surface: one Normal Volatility per Surface Point, in decimal, by the point's
+     * label. There is no grid and no interpolation, so a point that is not quoted is a failure rather
+     * than something to fill in from its neighbours.
+     *
+     * @param normalVols each Surface Point's Normal Volatility, by label, e.g. "USD 1Mx5Y" to 0.0095
+     */
+    public record VolMarket(Map<String, Double> normalVols) {
+
+        public static final VolMarket NONE = new VolMarket(Map.of());
+
+        public VolMarket {
+            normalVols = Collections.unmodifiableMap(new LinkedHashMap<>(normalVols));
+        }
+
+        /** The Surface Points quoted, in configuration order. */
+        public List<String> surfacePoints() {
+            return List.copyOf(normalVols.keySet());
+        }
+
+        public double normalVol(String currency, String surfacePoint) {
+            return normalVol(currency + " " + surfacePoint);
+        }
+
+        /** @param label the point as configuration spells it, e.g. "USD 1Mx5Y" */
+        public double normalVol(String label) {
+            Double vol = normalVols.get(label);
+            if (vol == null) {
+                throw new IllegalArgumentException("No Normal Volatility for Surface Point '" + label
+                        + "'; this market quotes " + surfacePoints());
+            }
+            return vol;
+        }
+
+        /** The same surface with one point's Normal Volatility replaced: used to bump it for Vega. */
+        public VolMarket withNormalVol(String label, double newVol) {
+            Map<String, Double> bumped = new LinkedHashMap<>(normalVols);
+            if (bumped.put(label, newVol) == null) {
+                throw new IllegalArgumentException("No Normal Volatility for Surface Point '" + label
+                        + "'; this market quotes " + surfacePoints());
+            }
+            return new VolMarket(bumped);
+        }
     }
 
     /**

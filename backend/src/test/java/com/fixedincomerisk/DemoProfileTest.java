@@ -9,6 +9,9 @@ import com.fixedincomerisk.curve.BundledEcbCurveSource;
 import com.fixedincomerisk.curve.CurveSource;
 import com.fixedincomerisk.curve.CurveSourceChoice;
 import com.fixedincomerisk.market.FxFixings;
+import com.fixedincomerisk.market.MarketState;
+import com.fixedincomerisk.market.RiskFactorId;
+import com.fixedincomerisk.model.CorrelationMatrix;
 import com.fixedincomerisk.session.RiskSession;
 import com.fixedincomerisk.session.RiskSnapshot.BookRisk;
 import com.fixedincomerisk.session.RiskSnapshot.CurrencyRates;
@@ -76,7 +79,9 @@ class DemoProfileTest {
 
     /**
      * The outright is the Book's clearest argument for reporting rates risk per currency: a headline of
-     * −0.72 is the near-cancellation of −280.80 of USD and +280.08 of EUR, which are not the same thing.
+     * +0.11 is the near-cancellation of −280.82 of USD and +280.93 of EUR, which are not the same thing.
+     * The headline is small enough that its sign is an accident of where the two curves sat this tick;
+     * the two legs behind it are not.
      */
     @Test
     void theTwoFxPositionsCarryTheirNotionalCurrencyAndSplitByCurve() {
@@ -89,14 +94,14 @@ class DemoProfileTest {
             PositionResult outright = position(session, "P18");
             assertThat(outright.instrumentType()).isEqualTo("FX_FORWARD");
             assertThat(outright.notionalCurrency()).isEqualTo("EUR");
-            assertThat(dv01In(outright, "USD")).isCloseTo(-280.8031, within(5e-5));
-            assertThat(dv01In(outright, "EUR")).isCloseTo(280.0822, within(5e-5));
-            assertThat(outright.dv01()).isCloseTo(-0.7208, within(5e-5));
+            assertThat(dv01In(outright, "USD")).isCloseTo(-280.8155, within(5e-5));
+            assertThat(dv01In(outright, "EUR")).isCloseTo(280.9282, within(5e-5));
+            assertThat(outright.dv01()).isCloseTo(0.1128, within(5e-5));
 
             PositionResult ndf = position(session, "P19");
             assertThat(ndf.instrumentType()).isEqualTo("FX_NDF");
             assertThat(ndf.notionalCurrency()).isEqualTo("USD");
-            assertThat(dv01In(ndf, "USD")).isCloseTo(0.3754, within(5e-5));
+            assertThat(dv01In(ndf, "USD")).isCloseTo(0.2086, within(5e-5));
             // No KRW curve exists, so the NDF's rates risk is in one currency only.
             assertThat(dv01In(ndf, "EUR")).isZero();
 
@@ -124,16 +129,16 @@ class DemoProfileTest {
             assertThat(book.fxDeltaByCurrency()).satisfiesExactly(
                     eur -> {
                         assertThat(eur.currency()).isEqualTo("EUR");
-                        assertThat(eur.amount()).isCloseTo(113_588.9064, within(5e-4));
+                        assertThat(eur.amount()).isCloseTo(113_932.0097, within(5e-4));
                     },
                     krw -> {
                         assertThat(krw.currency()).isEqualTo("KRW");
-                        assertThat(krw.amount()).isCloseTo(50_333.6276, within(5e-4));
+                        assertThat(krw.amount()).isCloseTo(50_137.8699, within(5e-4));
                     });
             // Only the non-deliverable pair has Forward Points to be sensitive to.
             assertThat(book.pointsDeltaByPair()).singleElement().satisfies(points -> {
                 assertThat(points.pair()).isEqualTo("USDKRW");
-                assertThat(points.amount()).isCloseTo(-36.5850, within(5e-5));
+                assertThat(points.amount()).isCloseTo(-36.3003, within(5e-5));
             });
 
             PositionResult outright = position(session, "P18");
@@ -314,10 +319,11 @@ class DemoProfileTest {
     }
 
     /**
-     * The single-currency regression check: the canonical demo frozen at Tick 24, which is the Book the
-     * article series quotes. These numbers move only when the seeded random stream moves — which adding FX
-     * to the correlated draw will do, and they are re-baselined then. Until that happens, a change here
-     * means a refactor has changed a price.
+     * The regression check: the canonical demo frozen at Tick 24, which is the Book the article series
+     * quotes. These numbers move only when the seeded random stream moves. It has now moved twice — once
+     * when FX joined the correlated draw, and again when the two Normal Volatility Surface Points did —
+     * and they were re-baselined each time. Both shifts land before the series re-measure, so it is paid
+     * once. Until the next one, a change here means a refactor has changed a price.
      */
     @Test
     void theDemoBookAtTickTwentyFourIsUnchanged() {
@@ -329,21 +335,21 @@ class DemoProfileTest {
             BookRisk book = session.snapshot().bookRisk();
 
             assertThat(session.snapshot().tick()).isEqualTo(24);
-            assertThat(book.dv01()).isCloseTo(20_549.3241, within(5e-5));
-            assertThat(book.value()).isCloseTo(32_927_395.5157, within(5e-4));
+            assertThat(book.dv01()).isCloseTo(20_878.5301, within(5e-5));
+            assertThat(book.value()).isCloseTo(33_011_173.5634, within(5e-4));
             // Two curves now. The Book holds no euro Position yet, so every basis point is still a
             // dollar one and the EUR line is present and empty — which is the thing worth asserting.
             assertThat(book.ratesByCurrency()).hasSize(2);
             assertThat(book.ratesByCurrency().get(0)).satisfies(usd -> {
                 assertThat(usd.currency()).isEqualTo("USD");
-                assertThat(usd.dv01()).isCloseTo(20_269.2418, within(5e-5));
+                assertThat(usd.dv01()).isCloseTo(20_597.6018, within(5e-5));
                 // The headline is no longer any one currency's DV01: it is a basis point of each, added
                 // up. That it now differs from USD alone is the whole reason it carries a label.
                 assertThat(usd.dv01()).isNotEqualTo(book.dv01());
             });
             assertThat(book.ratesByCurrency().get(1)).satisfies(eur -> {
                 assertThat(eur.currency()).isEqualTo("EUR");
-                assertThat(eur.dv01()).isCloseTo(280.0822, within(5e-5));
+                assertThat(eur.dv01()).isCloseTo(280.9282, within(5e-5));
                 // Pillars are global: the EUR curve is reported at the same tenors as the USD one.
                 assertThat(eur.bucketedDv01()).hasSameSizeAs(book.bucketedDv01());
             });
@@ -359,6 +365,79 @@ class DemoProfileTest {
             assertThat(context.getEnvironment().getProperty("risk.repricing.cycle-delay")).isEqualTo("1s");
             assertThat(context.getEnvironment().getProperty("risk.simulation.seed")).isEqualTo("42");
         });
+    }
+
+    /**
+     * The first Risk Factor in the engine that no curve can produce. Two named Surface Points, both
+     * quoted, both in the named correlation matrix, and both independent of everything else in it — the
+     * sign of the rate/vol correlation is regime-dependent, so the matrix says nothing rather than
+     * guessing. Turning it on later is an edit to the matrix and nothing else.
+     */
+    @Test
+    void bothSurfacePointsAreQuotedAndJoinTheCorrelationMatrixIndependently() {
+        runner("demo").run(context -> {
+            CorrelationMatrix matrix = CorrelationMatrix.parse(
+                    context.getEnvironment().getProperty("risk.correlation.factors"),
+                    context.getEnvironment().getProperty("risk.correlation.matrix"));
+            assertThat(matrix.has("normalVol.USD.1Mx5Y")).isTrue();
+            assertThat(matrix.has("normalVol.USD.1Yx10Y")).isTrue();
+            for (String other : matrix.factors()) {
+                if (!other.equals("normalVol.USD.1Mx5Y")) {
+                    assertThat(matrix.correlation("normalVol.USD.1Mx5Y", other)).isZero();
+                }
+                if (!other.equals("normalVol.USD.1Yx10Y")) {
+                    assertThat(matrix.correlation("normalVol.USD.1Yx10Y", other)).isZero();
+                }
+            }
+            // `basis` still comes last, which is what lets every contract substitute its own draw.
+            assertThat(matrix.factors().getLast()).isEqualTo("basis");
+
+            RiskSession session = context.getBean(RiskSession.class);
+            MarketState opening = session.marketState();
+            assertThat(opening.vols().surfacePoints()).containsExactly("USD 1Mx5Y", "USD 1Yx10Y");
+            // Each starts at its configured long-run mean, in decimal: 95bp and 85bp.
+            assertThat(opening.vols().normalVol("USD 1Mx5Y")).isCloseTo(0.0095, within(1e-15));
+            assertThat(opening.vols().normalVol("USD 1Yx10Y")).isCloseTo(0.0085, within(1e-15));
+
+            for (int tick = 1; tick <= 24; tick++) {
+                session.step();
+            }
+            MarketState market = session.marketState();
+            // Both moved, independently, and the Risk Factor reads the level back in its raw unit.
+            assertThat(market.riskFactorValue(RiskFactorId.normalVol("USD", "1Mx5Y")))
+                    .isEqualTo(market.vols().normalVol("USD 1Mx5Y"))
+                    .isNotEqualTo(opening.vols().normalVol("USD 1Mx5Y"))
+                    .isPositive();
+            assertThat(market.riskFactorValue(RiskFactorId.normalVol("USD", "1Yx10Y")))
+                    .isNotEqualTo(opening.vols().normalVol("USD 1Yx10Y"))
+                    .isPositive();
+        });
+    }
+
+    /** A point named with no level, or with no shock of its own, fails at startup naming the offender. */
+    @Test
+    void aSurfacePointThatIsNotFullyConfiguredFailsAtStartup() {
+        runner("demo").withPropertyValues("risk.vol.surface-points=USD 1Mx5Y, USD 3Mx2Y")
+                .run(context -> assertThat(context).getFailure().rootCause()
+                        .hasMessageContaining("USD 3Mx2Y")
+                        .hasMessageContaining("risk.vol.USD.3Mx2Y.long-run-mean-bp"));
+        runner("demo").withPropertyValues(
+                        "risk.vol.surface-points=USD 1Mx5Y, USD 3Mx2Y",
+                        "risk.vol.USD.3Mx2Y.long-run-mean-bp=90")
+                .run(context -> assertThat(context).getFailure().rootCause()
+                        .hasMessageContaining("risk.correlation.factors must name 'normalVol.USD.3Mx2Y'")
+                        .hasMessageContaining("Surface Point USD 3Mx2Y is quoted"));
+        // A currency with no Curve Source has no market to quote a volatility against.
+        runner("demo").withPropertyValues(
+                        "risk.vol.surface-points=KRW 1Mx5Y",
+                        "risk.vol.KRW.1Mx5Y.long-run-mean-bp=90",
+                        "risk.correlation.factors=shortRate.USD, systemic, shortRate.EUR, fxSpot.EURUSD, "
+                                + "fxSpot.USDKRW, ndfPoints.USDKRW, normalVol.KRW.1Mx5Y, basis",
+                        "risk.correlation.matrix=1,0,0,0,0,0,0,0; 0,1,0,0,0,0,0,0; 0,0,1,0,0,0,0,0; "
+                                + "0,0,0,1,0,0,0,0; 0,0,0,0,1,0,0,0; 0,0,0,0,0,1,0,0; 0,0,0,0,0,0,1,0; "
+                                + "0,0,0,0,0,0,0,1")
+                .run(context -> assertThat(context).getFailure().rootCause()
+                        .hasMessageContaining("Surface Point KRW 1Mx5Y is quoted in KRW, which has no Curve Source"));
     }
 
     @Test

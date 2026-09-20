@@ -37,6 +37,12 @@ public enum FactorType {
     /** An NDF pair's Forward Points, in pips. A deliverable pair has none: its forward comes from curves. */
     NDF_POINTS("pips", 1, false),
 
+    /**
+     * A Surface Point's Normal Volatility, in basis points per annum. The engine's first Risk Factor that
+     * no curve can produce: it is quoted by the market, not derived from discount factors.
+     */
+    NORMAL_VOL("bp", 1e4, false),
+
     /** The Valuation Date, as an epoch day. Any change is a move: Day Rollover dirties everything. */
     VALUATION_DATE("days", 1, true);
 

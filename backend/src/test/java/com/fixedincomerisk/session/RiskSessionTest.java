@@ -15,6 +15,7 @@ import com.fixedincomerisk.instrument.Instrument;
 import com.fixedincomerisk.market.FactorType;
 import com.fixedincomerisk.market.FixingHistory;
 import com.fixedincomerisk.market.Pillar;
+import com.fixedincomerisk.market.SurfacePoints;
 import com.fixedincomerisk.market.RiskFactorId;
 import com.fixedincomerisk.market.FxPairs;
 import com.fixedincomerisk.model.CorrelationMatrix;
@@ -59,7 +60,7 @@ class RiskSessionTest {
             THIRTY_YEAR,912810UW6,2000000
             """;
 
-    private static final RepricingSettings TWO_BP = new RepricingSettings(new MaterialityThresholds(2, 1, 1, 0.02, 0, 0), 0.05);
+    private static final RepricingSettings TWO_BP = new RepricingSettings(new MaterialityThresholds(2, 1, 1, 0.02, 0, 0, 0), 0.05);
 
     private static final CreditParameters CREDIT = new CreditParameters(0.5, 60, 40, 2, 25, 20, 15);
 
@@ -208,6 +209,8 @@ class RiskSessionTest {
                 basis,
                 FxPairs.NONE,
                 Map.of(),
+                Map.of(),
+                SurfacePoints.NONE,
                 Map.of(),
                 credit,
                 creditEvents,
@@ -524,7 +527,7 @@ class RiskSessionTest {
 
     @Test
     void veryLargeThresholdsRepriceNothingExceptAtDayRollover() {
-        RiskSession session = session(42, BOOK, 4, new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 1e6, 0, 0), 0.05));
+        RiskSession session = session(42, BOOK, 4, new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 1e6, 0, 0, 0), 0.05));
         RiskSnapshot start = session.snapshot();
 
         for (int tick = 1; tick <= 3; tick++) {
@@ -552,7 +555,7 @@ class RiskSessionTest {
     void subThresholdDriftAccumulatesUntilItTriggersAReprice() {
         // A 5bp threshold is several times the per-tick move, so any reprice is triggered by drift that
         // built up over many ticks. With no Day Rollover in the run, drift is the only trigger.
-        RiskSession session = session(42, BOOK, 10_000, new RepricingSettings(new MaterialityThresholds(5, 1e6, 1e6, 1e6, 0, 0), 0.05));
+        RiskSession session = session(42, BOOK, 10_000, new RepricingSettings(new MaterialityThresholds(5, 1e6, 1e6, 1e6, 0, 0, 0), 0.05));
         List<RiskSnapshot.CurvePoint> previous = session.snapshot().curve().pillars();
         double largestTickMoveBp = 0;
         int reprices = 0;
@@ -659,7 +662,7 @@ class RiskSessionTest {
     void aCtdSwitchChangesTheProxyBondJumpsTheBasisAndRepricesTheFutureOnThatTick() {
         // A switch on every tick and no diffusion; thresholds so large that nothing else reprices.
         RiskSession session = session(42, FUTURES_BOOK, 10_000,
-                new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 1e6, 0, 0), 0.05),
+                new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 1e6, 0, 0, 0), 0.05),
                 new FuturesBasisParameters(0, -0.2, 0, 1e12, 0.15));
         RiskSnapshot.FuturesView before = session.snapshot().futures().getFirst();
         assertThat(before.proxyBondId()).isEqualTo("ZNZ6-CTD1");
@@ -707,7 +710,7 @@ class RiskSessionTest {
     void aBasisMovePastItsThresholdRepricesTheFutureAlone() {
         // Curve thresholds too large to trigger, and no Day Rollover: only the Basis can dirty anything.
         RiskSession session = session(42, FUTURES_BOOK, 10_000,
-                new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 0.02, 0, 0), 0.05),
+                new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 0.02, 0, 0, 0), 0.05),
                 new FuturesBasisParameters(12, -0.2, 0.5, 0, 0.15));
         int futureReprices = 0;
 
@@ -886,7 +889,7 @@ class RiskSessionTest {
 
     /** Thresholds so large that only discrete moves (Day Rollover, Rating Migration) reprice anything. */
     private static final RepricingSettings NOTHING_BUT_DISCRETE_MOVES =
-            new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 1e6, 0, 0), 0.05);
+            new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 1e6, 0, 0, 0), 0.05);
 
     @Test
     void aRatingMigrationRewiresDependenciesAndMovesCs01BetweenBucketsOnTheSameTick() {

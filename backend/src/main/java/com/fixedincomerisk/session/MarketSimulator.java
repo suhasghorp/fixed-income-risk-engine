@@ -18,11 +18,13 @@ import com.fixedincomerisk.instrument.ProxyBond;
 import com.fixedincomerisk.instrument.TreasuryFuture;
 import com.fixedincomerisk.market.FixingHistory;
 import com.fixedincomerisk.market.MarketState;
+import com.fixedincomerisk.market.SurfacePoint;
 import com.fixedincomerisk.market.YieldCurve;
 import com.fixedincomerisk.model.CorrelatedShockGenerator;
 import com.fixedincomerisk.model.FuturesBasisSimulator;
 import com.fixedincomerisk.model.FxSpotSimulator;
 import com.fixedincomerisk.model.NdfPointsSimulator;
+import com.fixedincomerisk.model.NormalVolSimulator;
 import com.fixedincomerisk.model.FuturesBasisSimulator.CtdSwitch;
 import com.fixedincomerisk.model.HullWhiteModel;
 import com.fixedincomerisk.model.HullWhiteSimulator;
@@ -75,6 +77,8 @@ final class MarketSimulator {
     private final Map<String, FxSpotSimulator> fxSpots = new LinkedHashMap<>();
     /** Forward Points per non-deliverable pair; a deliverable pair derives its forward from two curves. */
     private final Map<String, NdfPointsSimulator> ndfPoints = new LinkedHashMap<>();
+    /** One simulated Normal Volatility per Surface Point, by label, in configuration order. */
+    private final Map<String, NormalVolSimulator> normalVols = new LinkedHashMap<>();
     private final CorrelatedShockGenerator shocks;
     private final FuturesBasisSimulator futuresBasis;
     /** The Book's futures contracts, by contract id. */
@@ -106,6 +110,9 @@ final class MarketSimulator {
         }
         for (FxPair pair : config.fxPairs().nonDeliverable()) {
             ndfPoints.put(pair.pair(), new NdfPointsSimulator(config.ndfPoints(pair.pair())));
+        }
+        for (SurfacePoint point : config.surfacePoints().points()) {
+            normalVols.put(point.label(), new NormalVolSimulator(config.normalVol(point.label())));
         }
         this.shocks = new CorrelatedShockGenerator(config.correlations());
         Map<String, Integer> deliverableCounts = new LinkedHashMap<>();
@@ -159,6 +166,10 @@ final class MarketSimulator {
                 spot.advance(step.dt(), tickShocks.of(config.fxPairs().get(pair).spotShockFactor())));
         ndfPoints.forEach((pair, points) ->
                 points.advance(step.dt(), tickShocks.of(config.fxPairs().get(pair).pointsShockFactor())));
+        // Each Surface Point likewise: its own named shock, so two points are correlated only through
+        // whatever the matrix says, and today it says nothing at all.
+        config.surfacePoints().points().forEach(point ->
+                normalVols.get(point.label()).advance(step.dt(), tickShocks.of(point.volShockFactor())));
         List<CtdSwitchEvent> switches =
                 ctdSwitchEvents(futuresBasis.advance(clock.tick(), step.dt(), tickShocks.basis(), random));
         creditFactors.advance(clock.tick(), step.dt(), tickShocks.of("systemic"), random);
@@ -191,7 +202,14 @@ final class MarketSimulator {
 
     private MarketState currentMarket() {
         return new MarketState(clock.valuationDate(), curves(), futuresBasis.state(), creditMarket(),
-                fixingHistory.fixings(), fxMarket());
+                fixingHistory.fixings(), fxMarket(), volMarket());
+    }
+
+    /** Every Surface Point's Normal Volatility, in decimal, by the point's label. */
+    private MarketState.VolMarket volMarket() {
+        Map<String, Double> vols = new LinkedHashMap<>();
+        normalVols.forEach((label, simulator) -> vols.put(label, simulator.vol()));
+        return new MarketState.VolMarket(vols);
     }
 
     /** Every pair's FX Spot, and Forward Points for the non-deliverable ones. */

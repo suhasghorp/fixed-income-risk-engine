@@ -8,11 +8,14 @@ import com.fixedincomerisk.instrument.Instrument;
 import com.fixedincomerisk.market.FxPair;
 import com.fixedincomerisk.market.FxPairs;
 import com.fixedincomerisk.market.Pillar;
+import com.fixedincomerisk.market.SurfacePoint;
+import com.fixedincomerisk.market.SurfacePoints;
 import com.fixedincomerisk.model.CorrelationMatrix;
 import com.fixedincomerisk.model.FuturesBasisParameters;
 import com.fixedincomerisk.model.FxSpotParameters;
 import com.fixedincomerisk.model.HullWhiteParameters;
 import com.fixedincomerisk.model.NdfPointsParameters;
+import com.fixedincomerisk.model.NormalVolParameters;
 import com.fixedincomerisk.refdata.ReferenceData;
 import com.fixedincomerisk.repricing.RepricingSettings;
 import com.fixedincomerisk.simulation.SimulationSettings;
@@ -33,6 +36,8 @@ import java.util.Map;
  * @param fxPairs           the currency pairs simulated, in reporting order
  * @param fxSpot            FX Spot parameters per pair
  * @param ndfPoints         Forward Points parameters per non-deliverable pair
+ * @param surfacePoints     the Surface Points a Normal Volatility is quoted at, in configuration order
+ * @param normalVol         Normal Volatility parameters per Surface Point, by the point's label
  */
 public record SessionConfig(
         List<CurveSource> curveSources,
@@ -43,6 +48,8 @@ public record SessionConfig(
         FxPairs fxPairs,
         Map<String, FxSpotParameters> fxSpot,
         Map<String, NdfPointsParameters> ndfPoints,
+        SurfacePoints surfacePoints,
+        Map<String, NormalVolParameters> normalVol,
         CreditParameters credit,
         CreditEventParameters creditEvents,
         CorrelationMatrix correlations,
@@ -55,6 +62,7 @@ public record SessionConfig(
         hullWhite = Map.copyOf(hullWhite);
         fxSpot = Map.copyOf(fxSpot);
         ndfPoints = Map.copyOf(ndfPoints);
+        normalVol = Map.copyOf(normalVol);
         pillars = List.copyOf(pillars);
         if (curveSources.isEmpty()) {
             throw new IllegalArgumentException("A session needs at least one Curve Source");
@@ -103,6 +111,19 @@ public record SessionConfig(
                         + "; configured " + ndfPoints.keySet());
             }
         }
+        // Each Surface Point is quoted in a currency the session has a curve for, has a process of its
+        // own, and takes its own shock: two points sharing one would be one volatility wearing two names.
+        for (SurfacePoint point : surfacePoints.points()) {
+            if (!currencies.contains(point.currency())) {
+                throw new IllegalArgumentException("Surface Point " + point.label() + " is quoted in "
+                        + point.currency() + ", which has no Curve Source; configured " + currencies);
+            }
+            requireFactor(correlations, point.volShockFactor(), "Surface Point " + point.label() + " is quoted");
+            if (!normalVol.containsKey(point.label())) {
+                throw new IllegalArgumentException("No Normal Volatility parameters for " + point.label()
+                        + "; configured " + normalVol.keySet());
+            }
+        }
     }
 
     /** The correlated-driver name for one currency's short rate. */
@@ -133,6 +154,15 @@ public record SessionConfig(
         FxSpotParameters parameters = fxSpot.get(pair);
         if (parameters == null) {
             throw new IllegalArgumentException("No FX Spot parameters for " + pair);
+        }
+        return parameters;
+    }
+
+    /** @param surfacePoint the point as configuration spells it, e.g. "USD 1Mx5Y" */
+    public NormalVolParameters normalVol(String surfacePoint) {
+        NormalVolParameters parameters = normalVol.get(surfacePoint);
+        if (parameters == null) {
+            throw new IllegalArgumentException("No Normal Volatility parameters for " + surfacePoint);
         }
         return parameters;
     }

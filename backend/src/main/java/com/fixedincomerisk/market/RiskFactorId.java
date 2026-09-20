@@ -60,6 +60,14 @@ public record RiskFactorId(String currency, FactorType type, String name) {
         return new RiskFactorId(currency, FactorType.NDF_POINTS, pair);
     }
 
+    /**
+     * A Surface Point's Normal Volatility. The identifier already carries a currency, so a Surface Point
+     * needs no scheme of its own: the name is the point, e.g. "1Mx5Y".
+     */
+    public static RiskFactorId normalVol(String currency, String surfacePoint) {
+        return new RiskFactorId(currency, FactorType.NORMAL_VOL, surfacePoint);
+    }
+
     public static RiskFactorId valuationDate(String currency) {
         return new RiskFactorId(currency, FactorType.VALUATION_DATE, "");
     }

@@ -11,9 +11,11 @@ import com.fixedincomerisk.curve.BundledEcbCurveSource;
 import com.fixedincomerisk.curve.EcbTenors;
 import com.fixedincomerisk.market.Pillar;
 import com.fixedincomerisk.market.FxPairs;
+import com.fixedincomerisk.market.SurfacePoints;
 import com.fixedincomerisk.model.CorrelationMatrix;
 import com.fixedincomerisk.model.FxSpotParameters;
 import com.fixedincomerisk.model.NdfPointsParameters;
+import com.fixedincomerisk.model.NormalVolParameters;
 import com.fixedincomerisk.model.FuturesBasisParameters;
 import com.fixedincomerisk.model.HullWhiteParameters;
 import com.fixedincomerisk.refdata.ReferenceData;
@@ -40,10 +42,13 @@ class SimulationLoopTest {
                 FxPairs.fromClasspath(),
                 Map.of("EURUSD", new FxSpotParameters(0.08), "USDKRW", new FxSpotParameters(0.09)),
                 Map.of("USDKRW", new NdfPointsParameters(12, -150, 40)),
+                SurfacePoints.parse("USD 1Mx5Y"),
+                Map.of("USD 1Mx5Y", new NormalVolParameters(2, 0.6, 0.0095)),
                 new CreditParameters(0.5, 60, 40, 2, 25, 20, 15),
                 CreditEventParameters.NONE,
                 CorrelationMatrix.independent(List.of("shortRate.USD", "shortRate.EUR",
-                        "fxSpot.EURUSD", "fxSpot.USDKRW", "ndfPoints.USDKRW", "systemic", "basis")),
+                        "fxSpot.EURUSD", "fxSpot.USDKRW", "ndfPoints.USDKRW", "normalVol.USD.1Mx5Y",
+                        "systemic", "basis")),
                 Pillar.DEFAULTS,
                 new SimulationSettings(42, Duration.ofHours(1), 24, stopAtTick),
                 RepricingSettings.REPRICE_EVERYTHING));

@@ -19,12 +19,15 @@ import com.fixedincomerisk.model.FuturesBasisParameters;
 import com.fixedincomerisk.model.FxSpotParameters;
 import com.fixedincomerisk.model.HullWhiteParameters;
 import com.fixedincomerisk.model.NdfPointsParameters;
+import com.fixedincomerisk.model.NormalVolParameters;
 import com.fixedincomerisk.refdata.ReferenceData;
 import com.fixedincomerisk.repricing.MaterialityThresholds;
 import com.fixedincomerisk.repricing.RepricingSettings;
 import com.fixedincomerisk.market.FxPair;
 import com.fixedincomerisk.market.FxPairs;
 import com.fixedincomerisk.market.Pillar;
+import com.fixedincomerisk.market.SurfacePoint;
+import com.fixedincomerisk.market.SurfacePoints;
 import com.fixedincomerisk.session.RiskSession;
 import com.fixedincomerisk.session.SessionConfig;
 import com.fixedincomerisk.simulation.SimulationSettings;
@@ -106,6 +109,9 @@ class RiskSessionConfiguration {
                             @Value("${risk.credit.events.print-burst-multiplier}") double printBurstMultiplier,
                             @Value("${risk.credit.events.print-burst-decay}") double printBurstDecay,
                             @Value("${risk.credit.events.scheduled:}") String scheduledCreditEvents,
+                            @Value("${risk.vol.surface-points:}") String surfacePointLabels,
+                            @Value("${risk.vol.kappa}") double volMeanReversion,
+                            @Value("${risk.vol.eta}") double volOfVol,
                             @Value("${risk.pillars}") String pillars,
                             @Value("${risk.correlation.factors}") String correlationFactors,
                             @Value("${risk.correlation.matrix}") String correlationMatrix,
@@ -119,12 +125,14 @@ class RiskSessionConfiguration {
                             @Value("${risk.materiality.basis-points}") double basisThresholdPoints,
                             @Value("${risk.materiality.fx-spot-percent}") double fxSpotThresholdPercent,
                             @Value("${risk.materiality.ndf-points-pips}") double ndfPointsThresholdPips,
+                            @Value("${risk.materiality.normal-vol-bp}") double normalVolThresholdBp,
                             @Value("${risk.repricing.min-pillar-exposure}") double minPillarExposure,
                             @Value("${risk.repricing.worker-threads}") int workerThreads) {
         long seed = configuredSeed.isBlank() ? new SecureRandom().nextLong() : Long.parseLong(configuredSeed.trim());
         log.info("Simulation seed {} (set risk.simulation.seed={} to replay this run); {} simulated per tick; "
                         + "Day Rollover every {} ticks", seed, seed, simulatedTimePerTick, ticksPerDay);
         FxPairs fxPairs = FxPairs.fromClasspath();
+        SurfacePoints surfacePoints = SurfacePoints.parse(surfacePointLabels);
         SessionConfig config = new SessionConfig(
                 curveSources,
                 reportingCurrency,
@@ -138,6 +146,8 @@ class RiskSessionConfiguration {
                 fxPairs,
                 fxSpotByPair(fxPairs, environment),
                 ndfPointsByPair(fxPairs, environment),
+                surfacePoints,
+                normalVolByPoint(surfacePoints, volMeanReversion, volOfVol, environment),
                 new CreditParameters(systemicMeanReversion, systemicLongRunMeanBp, systemicVolatilityBp,
                         sectorMeanReversion, sectorVolatilityBp, idiosyncraticMeanReversion, idiosyncraticVolatilityBp),
                 new CreditEventParameters(creditEventIntensity, creditEventJumpMeanBp, creditEventJumpDecay,
@@ -150,7 +160,7 @@ class RiskSessionConfiguration {
                 new SimulationSettings(seed, simulatedTimePerTick, ticksPerDay, stopAtTick),
                 new RepricingSettings(new MaterialityThresholds(pillarZeroRateThresholdBp, markThresholdBp,
                         creditIndexThresholdBp, basisThresholdPoints, fxSpotThresholdPercent,
-                        ndfPointsThresholdPips), minPillarExposure, workerThreads));
+                        ndfPointsThresholdPips, normalVolThresholdBp), minPillarExposure, workerThreads));
         return RiskSession.create(config);
     }
 
@@ -176,6 +186,26 @@ class RiskSessionConfiguration {
                     required(environment, prefix + "kappa"),
                     required(environment, prefix + "long-run-mean-pips"),
                     required(environment, prefix + "eta-pips")));
+        }
+        return parameters;
+    }
+
+    /**
+     * Normal Volatility parameters per Surface Point. κ and η are global, as the futures Basis's are;
+     * the long-run mean is per point, read as {@code risk.vol.<CCY>.<POINT>.long-run-mean-bp}. A point
+     * named in {@code risk.vol.surface-points} with no level configured fails here, naming the offender.
+     */
+    private static Map<String, NormalVolParameters> normalVolByPoint(SurfacePoints points, double meanReversion,
+                                                                     double volOfVol, Environment environment) {
+        Map<String, NormalVolParameters> parameters = new LinkedHashMap<>();
+        for (SurfacePoint point : points.points()) {
+            String key = point.propertyPrefix() + "long-run-mean-bp";
+            Double longRunMeanBp = environment.getProperty(key, Double.class);
+            if (longRunMeanBp == null) {
+                throw new IllegalStateException("Surface Point " + point.label()
+                        + " is named in risk.vol.surface-points but has no " + key);
+            }
+            parameters.put(point.label(), new NormalVolParameters(meanReversion, volOfVol, longRunMeanBp * 1e-4));
         }
         return parameters;
     }
