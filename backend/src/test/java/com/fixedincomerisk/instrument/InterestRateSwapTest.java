@@ -55,6 +55,77 @@ class InterestRateSwapTest {
         assertThat(parRate).isBetween(0.0395, 0.0415);
     }
 
+    /**
+     * The Annuity, hand-checked: a one-year swap has two fixed periods, both exactly half a year on
+     * 30/360, so its Annuity is half of each period-end discount factor. This is the number a Swaption's
+     * value scales with, and it comes off the swap's own schedule rather than a second one.
+     */
+    @Test
+    void theAnnuityIsTheDiscountedFixedAccrualsOnTheSwapsOwnSchedule() {
+        LocalDate maturity = VALUATION.plusYears(1);
+        InterestRateSwap oneYear = new InterestRateSwap("IRS-1Y", InterestRateSwap.Direction.PAY_FIXED,
+                0.04, VALUATION, maturity);
+        MarketState market = market(VALUATION, Map.of(VALUATION, FIXING));
+
+        assertThat(oneYear.annuity(market)).isCloseTo(
+                0.5 * df(VALUATION, LocalDate.of(2027, 3, 11)) + 0.5 * df(VALUATION, maturity), within(1e-15));
+        // It is the same Annuity the swap prices with: value is linear in the strike with slope −A.
+        double atFourPercent = oneYear.dirtyValue(market);
+        double atFivePercent = new InterestRateSwap("IRS-1Y", InterestRateSwap.Direction.PAY_FIXED,
+                0.05, VALUATION, maturity).dirtyValue(market);
+        assertThat((atFivePercent - atFourPercent) / 0.01).isCloseTo(-oneYear.annuity(market), within(1e-15));
+    }
+
+    /**
+     * The identity that defines the Forward Swap Rate: a swap struck at it is worth nothing. It has to
+     * hold for a seasoned swap valued off a Fixing and for a forward-starting one with no Fixing at all,
+     * because the second is the swap a Swaption exercises into.
+     */
+    @Test
+    void aSwapStruckAtItsForwardRateIsWorthNothing() {
+        MarketState seasonedMarket = market(VALUATION, Map.of(RESET, FIXING));
+        // The underlying of a 1M x 5Y swaption: it starts at the Expiry, so nothing has fixed yet.
+        LocalDate expiry = VALUATION.plusMonths(1);
+        InterestRateSwap forwardStarting = new InterestRateSwap("IRS-1Mx5Y",
+                InterestRateSwap.Direction.PAY_FIXED, 0.04, expiry, expiry.plusYears(5));
+        MarketState noFixings = market(VALUATION, Map.of());
+
+        for (InterestRateSwap swap : new InterestRateSwap[] {SEASONED, forwardStarting}) {
+            MarketState market = swap == SEASONED ? seasonedMarket : noFixings;
+            double forward = swap.forwardRate(market);
+
+            for (InterestRateSwap.Direction direction : InterestRateSwap.Direction.values()) {
+                InterestRateSwap struckAtTheForward = new InterestRateSwap(
+                        swap.id(), direction, forward, swap.effectiveDate(), swap.maturityDate());
+
+                assertThat(struckAtTheForward.dirtyValue(market))
+                        .as("%s %s struck at its forward %s", swap.id(), direction, forward)
+                        .isCloseTo(0, within(1e-15));
+            }
+            // Both sides of the same swap are worth zero at the same rate, so the rate cannot depend on
+            // which side you are: a Swaption's strike comparison would be direction-dependent if it did.
+            assertThat(new InterestRateSwap(swap.id(), InterestRateSwap.Direction.RECEIVE_FIXED,
+                    swap.fixedRate(), swap.effectiveDate(), swap.maturityDate()).forwardRate(market))
+                    .isEqualTo(forward);
+            // On a flat 4% curve the forward swap rate is the flat rate, up to the day-count difference
+            // between the 30/360 fixed leg and the ACT/365 curve.
+            assertThat(forward).isBetween(0.0395, 0.0415);
+        }
+    }
+
+    /** A swap with nothing left to discount has no Forward Swap Rate, and says so rather than dividing. */
+    @Test
+    void aMaturedSwapHasNoForwardRate() {
+        MarketState afterMaturity = market(SEASONED.maturityDate().plusDays(1), Map.of());
+
+        assertThat(SEASONED.annuity(afterMaturity)).isZero();
+        assertThat(SEASONED.dirtyValue(afterMaturity)).isZero();
+        assertThatThrownBy(() -> SEASONED.forwardRate(afterMaturity))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("IRS-5Y-PAY")
+                .hasMessageContaining("no fixed payment is left");
+    }
+
     @Test
     void midPeriodTheCurrentCouponComesFromItsFixingAndTheRestFromTheParFormula() {
         MarketState market = market(VALUATION, Map.of(RESET, FIXING));

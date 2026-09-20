@@ -103,27 +103,57 @@ public record InterestRateSwap(String id, Direction direction, double fixedRate,
     /** Value per unit of notional to this swap's holder: floating leg minus fixed leg for the fixed payer. */
     @Override
     public double dirtyValue(MarketState market) {
-        LocalDate valuationDate = market.valuationDate();
-        if (!maturityDate.isAfter(valuationDate)) {
+        if (!maturityDate.isAfter(market.valuationDate())) {
             return 0;
         }
-        double fixed = 0;
+        return direction.sign * (floatingLegValue(market) - fixedRate * annuity(market));
+    }
+
+    /**
+     * The Annuity per unit of notional: the discounted value of the remaining fixed-leg accruals, on this
+     * swap's own 30/360 schedule. It is the factor a Swaption's value scales with, and the denominator of
+     * {@link #forwardRate(MarketState)}. Zero once every fixed payment is in the past.
+     */
+    public double annuity(MarketState market) {
+        double annuity = 0;
         for (Period period : fixedPeriods()) {
-            if (period.end().isAfter(valuationDate)) {
-                fixed += fixedRate * fixedAccrual(period) * discountFactor(market, period.end());
+            if (period.end().isAfter(market.valuationDate())) {
+                annuity += fixedAccrual(period) * discountFactor(market, period.end());
             }
         }
-        double floating;
-        Optional<Period> current = currentFloatingPeriod(valuationDate);
-        if (current.isPresent()) {
-            Period period = current.get();
-            double fixing = market.fixings().rate(period.start());
-            floating = fixing * floatingAccrual(period) * discountFactor(market, period.end())
-                    + discountFactor(market, period.end()) - discountFactor(market, maturityDate);
-        } else {
-            floating = discountFactor(market, effectiveDate) - discountFactor(market, maturityDate);
+        return annuity;
+    }
+
+    /**
+     * The Forward Swap Rate per unit of notional: the fixed rate that would make this swap worth zero,
+     * which is the floating leg over the {@link #annuity(MarketState)}. It is defined by that identity and
+     * computed from it, off this swap's own schedule and conventions — so the rate a Swaption compares
+     * against its strike is the rate of the swap it would exercise into, not a restatement of it.
+     *
+     * <p>Independent of {@link #direction()}: both sides of the same swap are worth zero at the same rate.
+     */
+    public double forwardRate(MarketState market) {
+        double annuity = annuity(market);
+        if (annuity <= 0) {
+            throw new IllegalStateException("Swap " + id + " has no Forward Swap Rate on "
+                    + market.valuationDate() + ": no fixed payment is left to discount");
         }
-        return direction.sign * (floating - fixed);
+        return floatingLegValue(market) / annuity;
+    }
+
+    /**
+     * The floating leg per unit of notional. The current period's coupon is known from its Fixing; the
+     * rest telescope to P(start) − P(end), which is why a forward-starting swap needs no Fixing at all.
+     */
+    private double floatingLegValue(MarketState market) {
+        Optional<Period> current = currentFloatingPeriod(market.valuationDate());
+        if (current.isEmpty()) {
+            return discountFactor(market, effectiveDate) - discountFactor(market, maturityDate);
+        }
+        Period period = current.get();
+        double fixing = market.fixings().rate(period.start());
+        return fixing * floatingAccrual(period) * discountFactor(market, period.end())
+                + discountFactor(market, period.end()) - discountFactor(market, maturityDate);
     }
 
     /** Fixed and floating payments dated after {@code from} and on or before {@code to}, signed for the holder. */
