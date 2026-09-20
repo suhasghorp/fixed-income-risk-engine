@@ -18,11 +18,11 @@ class RepricingEngineTest {
     private static final RiskFactorId TEN_YEAR = RiskFactorId.pillarZeroRate("USD", Pillar.parse("10Y"));
     private static final RiskFactorId VALUATION_DATE = RiskFactorId.valuationDate("USD");
 
-    private final RepricingEngine engine = new RepricingEngine(new MaterialityThresholds(1, 1, 1, 0.02));
+    private final RepricingEngine engine = new RepricingEngine(new MaterialityThresholds(1, 1, 1, 0.02, 0, 0));
 
     /** A flat curve at {@code rate}. */
     private static MarketState flat(double rate) {
-        return new MarketState(DAY, t -> Math.exp(-rate * t));
+        return MarketState.of(DAY, "USD", t -> Math.exp(-rate * t));
     }
 
     @Test
@@ -50,7 +50,7 @@ class RepricingEngineTest {
         engine.setDependencies("BOND", Set.of(TWO_YEAR, VALUATION_DATE));
         engine.recordPriced("BOND", flat(0.04), 0);
 
-        MarketState nextDay = new MarketState(DAY.plusDays(1), flat(0.04).curve());
+        MarketState nextDay = MarketState.of(DAY.plusDays(1), "USD", flat(0.04).curve("USD"));
 
         assertThat(engine.isDirty("BOND", nextDay)).isTrue();
     }

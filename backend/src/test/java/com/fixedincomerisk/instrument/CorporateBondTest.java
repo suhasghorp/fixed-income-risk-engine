@@ -22,7 +22,7 @@ class CorporateBondTest {
             "ACME-4.85-2031", "ACME", "Acme Industries", 0.0485, LocalDate.of(2024, 6, 15), LocalDate.of(2031, 6, 15));
 
     private static MarketState market(double mark) {
-        return new MarketState(VALUATION, t -> Math.exp(-FLAT_RATE * t), Map.of(), new MarketState.CreditMarket(
+        return new MarketState(VALUATION, Map.of("USD", t -> Math.exp(-FLAT_RATE * t)), Map.of(), new MarketState.CreditMarket(
                 0.0060, Map.of("A Industrials", 0.0025), Map.of("ACME", "A Industrials"), Map.of("ACME", mark)));
     }
 
@@ -79,7 +79,7 @@ class CorporateBondTest {
         SensitivityCalculator calculator = new SensitivityCalculator(Pillar.DEFAULTS);
 
         assertThat(calculator.cs01(ACME, market(MARK)))
-                .isCloseTo(calculator.curveSensitivities(ACME, market(MARK)).dv01(), within(1e-12));
+                .isCloseTo(calculator.curveSensitivities(ACME, market(MARK), "USD").dv01(), within(1e-12));
     }
 
     @Test

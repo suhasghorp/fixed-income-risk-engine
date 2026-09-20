@@ -3,8 +3,7 @@ package com.fixedincomerisk.repricing;
 import com.fixedincomerisk.market.FactorType;
 import com.fixedincomerisk.market.Pillar;
 import com.fixedincomerisk.market.RiskFactorId;
-import com.fixedincomerisk.risk.CurveSensitivities;
-import java.util.Arrays;
+import com.fixedincomerisk.risk.RatesSensitivities;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -26,21 +25,22 @@ public final class MaterialDependencies {
     /**
      * @param declared the Instrument's declared Risk Factors
      * @param pillars  the Pillars, in the order of {@code perUnit}'s buckets
-     * @param perUnit  the Instrument's current per-unit sensitivities
+     * @param perUnit  the Instrument's current per-unit sensitivities, per currency
      * @param minShare the smallest share of the sum of absolute buckets a Pillar must carry
      */
-    public static Set<RiskFactorId> of(Set<RiskFactorId> declared, List<Pillar> pillars, CurveSensitivities perUnit,
+    public static Set<RiskFactorId> of(Set<RiskFactorId> declared, List<Pillar> pillars, RatesSensitivities perUnit,
                                        double minShare) {
-        double[] buckets = perUnit.bucketedDv01();
-        double total = Arrays.stream(buckets).map(Math::abs).sum();
+        // Measured against the Instrument's whole rates exposure, so a Pillar in the currency it barely
+        // touches is immaterial for the reason it should be: the exposure there is small.
+        double total = perUnit.totalAbsoluteBucketedDv01();
         Set<RiskFactorId> material = new LinkedHashSet<>();
         for (RiskFactorId factor : declared) {
             if (factor.type() != FactorType.PILLAR_ZERO_RATE) {
                 material.add(factor);
                 continue;
             }
-            int bucket = indexOf(pillars, factor.name());
-            if (total > 0 && Math.abs(buckets[bucket]) / total >= minShare) {
+            double bucket = perUnit.in(factor.currency()).bucketedDv01()[indexOf(pillars, factor.name())];
+            if (total > 0 && Math.abs(bucket) / total >= minShare) {
                 material.add(factor);
             }
         }

@@ -70,27 +70,27 @@ class TreasuryCurveSourceTest {
 
     @Test
     void liveFetchSucceedsReportsLiveAndCachesTheCurve() {
-        CurveCache cache = cacheInTempDir();
+        CurveCache<ParCurve> cache = cacheInTempDir();
 
         CurveSnapshot snapshot = source(SEPTEMBER_2026, cache).load();
 
         assertThat(snapshot.source()).isEqualTo(CurveSourceKind.LIVE);
-        assertThat(snapshot.curve().curveDate()).isEqualTo(LocalDate.of(2026, 9, 11));
-        assertThat(snapshot.curve().points()).hasSize(14);
+        assertThat(snapshot.curveDate()).isEqualTo(LocalDate.of(2026, 9, 11));
         assertThat(requestedYears).containsExactly("2026");
-        assertThat(cache.read()).contains(snapshot.curve());
+        assertThat(cache.read()).contains(TreasuryParCurveCsv.parse(new StringReader(LIVE_CSV)));
+        assertThat(cache.read()).hasValueSatisfying(cached -> assertThat(cached.points()).hasSize(14));
     }
 
     @Test
     void liveFailureFallsBackToTheCachedCurve() {
-        CurveCache cache = cacheInTempDir();
+        CurveCache<ParCurve> cache = cacheInTempDir();
         source(SEPTEMBER_2026, cache).load();
         responder = year -> new Response(503, "Service Unavailable");
 
         CurveSnapshot snapshot = source(SEPTEMBER_2026, cache).load();
 
         assertThat(snapshot.source()).isEqualTo(CurveSourceKind.CACHED);
-        assertThat(snapshot.curve().curveDate()).isEqualTo(LocalDate.of(2026, 9, 11));
+        assertThat(snapshot.curveDate()).isEqualTo(LocalDate.of(2026, 9, 11));
     }
 
     @Test
@@ -100,7 +100,7 @@ class TreasuryCurveSourceTest {
         CurveSnapshot snapshot = source(SEPTEMBER_2026, cacheInTempDir()).load();
 
         assertThat(snapshot.source()).isEqualTo(CurveSourceKind.BUNDLED);
-        assertThat(snapshot.curve()).isEqualTo(new BundledCurveSource().load().curve());
+        assertThat(snapshot.curveDate()).isEqualTo(new BundledCurveSource().load().curveDate());
     }
 
     @Test
@@ -115,7 +115,7 @@ class TreasuryCurveSourceTest {
 
     @Test
     void unusableResponseIsNotCachedAndFallsBack() {
-        CurveCache cache = cacheInTempDir();
+        CurveCache<ParCurve> cache = cacheInTempDir();
         responder = year -> new Response(200, "<html><body>Maintenance</body></html>");
 
         CurveSnapshot snapshot = source(SEPTEMBER_2026, cache).load();
@@ -126,7 +126,7 @@ class TreasuryCurveSourceTest {
 
     @Test
     void corruptCacheIsIgnored() throws IOException {
-        CurveCache cache = cacheInTempDir();
+        CurveCache<ParCurve> cache = cacheInTempDir();
         Files.createDirectories(cache.file().getParent());
         Files.writeString(cache.file(), "not a curve");
         responder = year -> new Response(500, "boom");
@@ -141,7 +141,7 @@ class TreasuryCurveSourceTest {
         CurveSnapshot snapshot = source(JANUARY_2027, cacheInTempDir()).load();
 
         assertThat(snapshot.source()).isEqualTo(CurveSourceKind.LIVE);
-        assertThat(snapshot.curve().curveDate()).isEqualTo(LocalDate.of(2026, 12, 31));
+        assertThat(snapshot.curveDate()).isEqualTo(LocalDate.of(2026, 12, 31));
         assertThat(requestedYears).containsExactly("2027", "2026");
     }
 
@@ -152,13 +152,13 @@ class TreasuryCurveSourceTest {
         assertThat(TreasuryParCurveCsv.parse(new StringReader(TreasuryParCurveCsv.format(curve)))).isEqualTo(curve);
     }
 
-    private TreasuryCurveSource source(Clock clock, CurveCache cache) {
+    private TreasuryCurveSource source(Clock clock, CurveCache<ParCurve> cache) {
         URI baseUrl = URI.create("http://127.0.0.1:" + treasury.getAddress().getPort());
         return new TreasuryCurveSource(new TreasuryWebsiteCurveFetcher(baseUrl, clock), cache, new BundledCurveSource());
     }
 
-    private CurveCache cacheInTempDir() {
-        return new CurveCache(tempDir.resolve("cache").resolve("treasury-par-curve.csv"));
+    private CurveCache<ParCurve> cacheInTempDir() {
+        return CurveCache.forParCurve(tempDir.resolve("cache").resolve("treasury-par-curve.csv"));
     }
 
     private record Response(int status, String body) {

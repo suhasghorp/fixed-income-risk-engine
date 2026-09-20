@@ -9,6 +9,12 @@ public final class BundledCurveSource implements CurveSource {
 
     private static final String RESOURCE = "/curves/bundled-par-curve.csv";
 
+    /** The Treasury par curve is the USD curve. */
+    @Override
+    public String currency() {
+        return "USD";
+    }
+
     @Override
     public CurveSnapshot load() {
         InputStream in = BundledCurveSource.class.getResourceAsStream(RESOURCE);
@@ -16,6 +22,6 @@ public final class BundledCurveSource implements CurveSource {
             throw new IllegalStateException("Bundled curve snapshot missing: " + RESOURCE);
         }
         ParCurve curve = TreasuryParCurveCsv.parse(new InputStreamReader(in, StandardCharsets.UTF_8));
-        return new CurveSnapshot(curve, CurveSourceKind.BUNDLED);
+        return CurveSnapshot.of(curve, CurveSourceKind.BUNDLED);
     }
 }

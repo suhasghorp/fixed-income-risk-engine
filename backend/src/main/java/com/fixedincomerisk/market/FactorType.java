@@ -27,6 +27,16 @@ public enum FactorType {
     /** Which of a future's Proxy Bonds is current, as an index. Any change (a CTD Switch) is a move. */
     PROXY_BOND("", 1, true),
 
+    /**
+     * A currency pair's FX Spot, held as its <em>logarithm</em>, so a difference in it is a relative move
+     * and its Materiality Threshold is a percentage. A pip is too small to be meaningful on a Position
+     * sized in millions, and a percentage is comparable across pairs quoted at 1.15 and at 1,388.
+     */
+    FX_SPOT("%", 100, false),
+
+    /** An NDF pair's Forward Points, in pips. A deliverable pair has none: its forward comes from curves. */
+    NDF_POINTS("pips", 1, false),
+
     /** The Valuation Date, as an epoch day. Any change is a move: Day Rollover dirties everything. */
     VALUATION_DATE("days", 1, true);
 

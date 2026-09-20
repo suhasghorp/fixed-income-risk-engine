@@ -1,0 +1,15 @@
+# Which tenors of the ECB's euro area yield curve the session fetches. `code` is the DATA_TYPE_FM part
+# of the series key YC.B.U2.EUR.4F.G_N_A.SV_C_YM.<code> on the ECB Data Portal; `tenor` is the label the
+# engine uses; `years` is the knot time on the discount curve. The set spans every tenor in
+# `risk.pillars`, so the EUR curve is reported at the same Pillars as the USD curve.
+code,tenor,years
+SR_3M,3M,0.25
+SR_6M,6M,0.5
+SR_1Y,1Y,1
+SR_2Y,2Y,2
+SR_3Y,3Y,3
+SR_5Y,5Y,5
+SR_7Y,7Y,7
+SR_10Y,10Y,10
+SR_20Y,20Y,20
+SR_30Y,30Y,30

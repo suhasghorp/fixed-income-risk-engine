@@ -13,13 +13,19 @@ public final class TreasuryCurveSource implements CurveSource {
     private static final Logger log = LoggerFactory.getLogger(TreasuryCurveSource.class);
 
     private final TreasuryWebsiteCurveFetcher live;
-    private final CurveCache cache;
+    private final CurveCache<ParCurve> cache;
     private final CurveSource bundled;
 
-    public TreasuryCurveSource(TreasuryWebsiteCurveFetcher live, CurveCache cache, CurveSource bundled) {
+    public TreasuryCurveSource(TreasuryWebsiteCurveFetcher live, CurveCache<ParCurve> cache, CurveSource bundled) {
         this.live = live;
         this.cache = cache;
         this.bundled = bundled;
+    }
+
+    /** The Treasury par curve is the USD curve. */
+    @Override
+    public String currency() {
+        return "USD";
     }
 
     @Override
@@ -28,17 +34,17 @@ public final class TreasuryCurveSource implements CurveSource {
             ParCurve curve = live.fetchLatest();
             cacheQuietly(curve);
             log.info("Curve Source LIVE: Treasury par curve for {}", curve.curveDate());
-            return new CurveSnapshot(curve, CurveSourceKind.LIVE);
+            return CurveSnapshot.of(curve, CurveSourceKind.LIVE);
         } catch (CurveUnavailableException liveFailure) {
             Optional<ParCurve> cached = cache.read();
             if (cached.isPresent()) {
                 log.warn("Live curve fetch failed ({}); Curve Source CACHED: par curve for {}",
                         liveFailure.getMessage(), cached.get().curveDate());
-                return new CurveSnapshot(cached.get(), CurveSourceKind.CACHED);
+                return CurveSnapshot.of(cached.get(), CurveSourceKind.CACHED);
             }
             CurveSnapshot fallback = bundled.load();
             log.warn("Live curve fetch failed ({}) and no usable cache at {}; Curve Source {}: par curve for {}",
-                    liveFailure.getMessage(), cache.file(), fallback.source(), fallback.curve().curveDate());
+                    liveFailure.getMessage(), cache.file(), fallback.source(), fallback.curveDate());
             return fallback;
         }
     }

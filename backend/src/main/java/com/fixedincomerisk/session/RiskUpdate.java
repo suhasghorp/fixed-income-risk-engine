@@ -4,6 +4,7 @@ import com.fixedincomerisk.session.RiskSnapshot.BookRisk;
 import com.fixedincomerisk.session.RiskSnapshot.CreditView;
 import com.fixedincomerisk.session.RiskSnapshot.CtdSwitchEvent;
 import com.fixedincomerisk.session.RiskSnapshot.CurvePoint;
+import com.fixedincomerisk.session.RiskSnapshot.FxView;
 import com.fixedincomerisk.session.RiskSnapshot.FuturesView;
 import com.fixedincomerisk.session.RiskSnapshot.LifecycleEvent;
 import com.fixedincomerisk.session.RiskSnapshot.PositionResult;
@@ -27,6 +28,7 @@ import java.util.List;
  * @param ctdSwitches           CTD Switches that fired this cycle
  * @param credit                the credit market's observable state and Marks (the factors move every Tick)
  * @param swaps                 every swap's current period and Fixing, on a Day Rollover; null if unchanged
+ * @param fx                    the FX market and contract terms; null if unchanged
  */
 public record RiskUpdate(
         long sequence,
@@ -41,7 +43,8 @@ public record RiskUpdate(
         List<FuturesView> futures,
         List<CtdSwitchEvent> ctdSwitches,
         CreditView credit,
-        List<SwapView> swaps) {
+        List<SwapView> swaps,
+        FxView fx) {
 
     public RiskUpdate {
         positions = List.copyOf(positions);

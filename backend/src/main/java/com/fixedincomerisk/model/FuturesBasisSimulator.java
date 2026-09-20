@@ -1,10 +1,12 @@
 package com.fixedincomerisk.model;
 
 import com.fixedincomerisk.market.MarketState.FuturesMarket;
+import com.fixedincomerisk.model.FuturesBasisParameters.ScheduledCtdSwitch;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.random.RandomGenerator;
 
 /**
@@ -37,9 +39,14 @@ public final class FuturesBasisSimulator {
     /**
      * Advances every contract by {@code dt} years and returns the CTD Switches that fired.
      *
+     * <p>A contract with a switch scheduled at {@code tick} takes it instead of drawing one: the target
+     * Proxy Bond comes from configuration and the Basis jump is positive, so the moment does not move when
+     * the random stream shifts. Every contract still draws once for the Poisson trial either way, so
+     * scheduling one contract's switch does not change how another contract's draws fall.
+     *
      * @param shocks one standard normal Basis shock per contract, in contract order
      */
-    public List<CtdSwitch> advance(double dt, List<Double> shocks, RandomGenerator random) {
+    public List<CtdSwitch> advance(long tick, double dt, List<Double> shocks, RandomGenerator random) {
         if (shocks.size() != deliverableCounts.size()) {
             throw new IllegalArgumentException("Need one Basis shock per contract, got " + shocks.size());
         }
@@ -53,7 +60,21 @@ public final class FuturesBasisSimulator {
                     + parameters.meanReversion() * (parameters.longRunMean() - current.basis()) * dt
                     + parameters.volatility() * Math.sqrt(dt) * shock;
             int proxyIndex = current.proxyIndex();
-            if (random.nextDouble() < switchProbability) {
+            boolean drawn = random.nextDouble() < switchProbability;
+            Optional<ScheduledCtdSwitch> scheduled = parameters.scheduledAt(contract.getKey(), tick);
+            if (scheduled.isPresent()) {
+                int to = scheduled.get().proxyIndex();
+                if (to >= contract.getValue()) {
+                    throw new IllegalArgumentException("Scheduled CTD Switch for " + contract.getKey()
+                            + " names Proxy Bond " + (to + 1) + ", but it has only " + contract.getValue());
+                }
+                if (to != proxyIndex) {
+                    double jump = parameters.ctdSwitchJump();
+                    switches.add(new CtdSwitch(contract.getKey(), proxyIndex, to, jump));
+                    proxyIndex = to;
+                    basis += jump;
+                }
+            } else if (drawn) {
                 int to = random.nextInt(contract.getValue() - 1);
                 to = to >= proxyIndex ? to + 1 : to;
                 double jump = random.nextBoolean() ? parameters.ctdSwitchJump() : -parameters.ctdSwitchJump();

@@ -30,8 +30,8 @@ class InterestRateSwapTest {
             InterestRateSwap.Direction.PAY_FIXED, 0.0395, RESET, LocalDate.of(2031, 7, 15));
 
     private static MarketState market(LocalDate valuationDate, Map<LocalDate, Double> fixings) {
-        return new MarketState(valuationDate, t -> Math.exp(-FLAT_RATE * t), Map.of(), MarketState.CreditMarket.NONE,
-                new Fixings(fixings));
+        return new MarketState(valuationDate, Map.of("USD", t -> Math.exp(-FLAT_RATE * t)), Map.of(),
+                MarketState.CreditMarket.NONE, new Fixings(fixings));
     }
 
     private static double df(LocalDate valuationDate, LocalDate date) {
@@ -43,7 +43,7 @@ class InterestRateSwapTest {
         LocalDate maturity = VALUATION.plusYears(5);
         InterestRateSwap unit = new InterestRateSwap("PAR", InterestRateSwap.Direction.PAY_FIXED, 1, VALUATION, maturity);
         MarketState opening = market(VALUATION, Map.of());
-        MarketState withFixing = opening.withFixings(new Fixings(Map.of(VALUATION, FixingHistory.indexRate(opening, VALUATION))));
+        MarketState withFixing = opening.withFixings(new Fixings(Map.of(VALUATION, FixingHistory.indexRate(opening, "USD", VALUATION))));
         // Annuity: the fixed leg of a 100% coupon, from a zero-rate swap (value = floating − annuity).
         double floatingLeg = 1 - df(VALUATION, maturity);
         double annuity = floatingLeg - unit.dirtyValue(withFixing);
@@ -77,7 +77,7 @@ class InterestRateSwapTest {
     void onAResetDateTheFloatingLegIsWorthParLessTheFinalDiscountFactor() {
         LocalDate reset = LocalDate.of(2026, 10, 15);
         MarketState atReset = market(reset, Map.of());
-        MarketState market = atReset.withFixings(new Fixings(Map.of(RESET, FIXING, reset, FixingHistory.indexRate(atReset, reset))));
+        MarketState market = atReset.withFixings(new Fixings(Map.of(RESET, FIXING, reset, FixingHistory.indexRate(atReset, "USD", reset))));
         LocalDate maturity = LocalDate.of(2031, 7, 15);
         double fixed = 0;
         for (int year = 2027; year <= 2031; year++) {
@@ -106,8 +106,8 @@ class InterestRateSwapTest {
 
         assertThat(receiver.dirtyValue(market)).isEqualTo(-SEASONED.dirtyValue(market));
         SensitivityCalculator calculator = new SensitivityCalculator(Pillar.DEFAULTS);
-        assertThat(calculator.curveSensitivities(SEASONED, market).dv01()).as("a fixed payer gains as rates rise").isNegative();
-        assertThat(calculator.curveSensitivities(receiver, market).dv01()).isPositive();
+        assertThat(calculator.curveSensitivities(SEASONED, market, "USD").dv01()).as("a fixed payer gains as rates rise").isNegative();
+        assertThat(calculator.curveSensitivities(receiver, market, "USD").dv01()).isPositive();
     }
 
     @Test
@@ -115,10 +115,10 @@ class InterestRateSwapTest {
         MarketState market = market(VALUATION, Map.of(RESET, FIXING, LocalDate.of(2026, 10, 15), 0.041));
 
         assertThat(SEASONED.cashFlowsPaid(market, LocalDate.of(2026, 10, 14), LocalDate.of(2026, 10, 15)))
-                .containsExactly(new CashFlow(LocalDate.of(2026, 10, 15), CashFlow.Kind.FLOATING_LEG, FIXING * (92 / 360.0)));
+                .containsExactly(new CashFlow(LocalDate.of(2026, 10, 15), CashFlow.Kind.FLOATING_LEG, FIXING * (92 / 360.0), "USD"));
         assertThat(SEASONED.cashFlowsPaid(market, LocalDate.of(2027, 1, 14), LocalDate.of(2027, 1, 15))).containsExactly(
-                new CashFlow(LocalDate.of(2027, 1, 15), CashFlow.Kind.FIXED_LEG, -0.0395 * 0.5),
-                new CashFlow(LocalDate.of(2027, 1, 15), CashFlow.Kind.FLOATING_LEG, 0.041 * (92 / 360.0)));
+                new CashFlow(LocalDate.of(2027, 1, 15), CashFlow.Kind.FIXED_LEG, -0.0395 * 0.5, "USD"),
+                new CashFlow(LocalDate.of(2027, 1, 15), CashFlow.Kind.FLOATING_LEG, 0.041 * (92 / 360.0), "USD"));
     }
 
     @Test

@@ -1,0 +1,14 @@
+# Currency pairs the session simulates. Spot is quoted as units of the pair's second currency per unit of
+# its first, so EURUSD 1.146 is USD per EUR and USDKRW 1388.0977 is KRW per USD.
+#
+# Starting spots are REAL, from the ECB's euro foreign exchange reference rates for 2026-09-18:
+#   EURUSD  EXR.D.USD.EUR.SP00.A                                          = 1.146
+#   USDKRW  EXR.D.KRW.EUR.SP00.A / EXR.D.USD.EUR.SP00.A = 1590.76 / 1.146 = 1388.0977312390926
+#
+# `riskCurrency` is the side FX Delta is reported against: the pair's non-USD currency. `quotesPoints` is
+# true for a non-deliverable pair, whose forward is spot plus quoted Forward Points because it has no
+# curve to derive one from; a deliverable pair derives its forward from two curves and has no points.
+# The Forward Points process parameters are SYNTHETIC — see risk.fx.points.* in application.properties.
+pair,riskCurrency,startingSpot,pipSize,quotesPoints
+EURUSD,EUR,1.146,0.0001,false
+USDKRW,KRW,1388.0977312390926,0.01,true

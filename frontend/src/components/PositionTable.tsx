@@ -44,7 +44,10 @@ export function PositionTable({ positions, bookRisk, tick, telemetry }: Props) {
                 <td>{p.positionId}</td>
                 <td>{p.description}</td>
                 <td className="mono">{p.instrumentId}</td>
-                <td className={`num ${p.quantity < 0 ? 'short' : ''}`}>{formatQuantity(p.quantity)}</td>
+                <td className={`num ${p.quantity < 0 ? 'short' : ''}`} title={`${p.notionalCurrency} notional`}>
+                  {formatQuantity(p.quantity)}
+                  <span className="ccy-suffix">{p.notionalCurrency}</span>
+                </td>
                 <td className="num">{formatPrice(p.cleanPrice)}</td>
                 <td className="num">{formatPrice(p.accruedInterest)}</td>
                 <td className={`num ${p.value < 0 ? 'short' : ''}`}>{formatMoney(p.value)}</td>

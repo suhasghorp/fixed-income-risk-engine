@@ -131,6 +131,30 @@ h2 {
   border-color: var(--secondary);
 }
 
+/* One row per currency: the two curves arrive by different routes and fall back independently. */
+.curve-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.curve-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.curve-source .ccy {
+  color: var(--secondary);
+  font-size: 0.8rem;
+  min-width: 2.2em;
+}
+
+.curve-source .curve-date {
+  color: var(--secondary);
+  font-size: 0.8rem;
+}
+
 .layout {
   display: grid;
   gap: 20px;
@@ -375,4 +399,11 @@ tr.muted td {
   color: var(--secondary);
   border-color: var(--secondary);
   font-weight: 600;
+}
+
+/* The currency a number is denominated in, where the Book holds more than one. */
+.ccy-suffix {
+  color: var(--secondary);
+  font-size: 0.75rem;
+  margin-left: 4px;
 }

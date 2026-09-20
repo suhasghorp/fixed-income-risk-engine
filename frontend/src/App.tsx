@@ -3,6 +3,7 @@ import { BookRiskPanel } from './components/BookRiskPanel';
 import { CreditPanel } from './components/CreditPanel';
 import { CurveChart } from './components/CurveChart';
 import { FuturesPanel } from './components/FuturesPanel';
+import { FxPanel } from './components/FxPanel';
 import { LifecycleEvents } from './components/LifecycleEvents';
 import { PositionTable } from './components/PositionTable';
 import { SwapsPanel } from './components/SwapsPanel';
@@ -30,6 +31,7 @@ export function App() {
           />
           {snapshot.credit.issuers.length > 0 && <CreditPanel credit={snapshot.credit} tick={snapshot.tick} />}
           {snapshot.swaps.length > 0 && <SwapsPanel swaps={snapshot.swaps} positions={snapshot.positions} />}
+          {snapshot.fx.contracts.length > 0 && <FxPanel fx={snapshot.fx} positions={snapshot.positions} />}
           {snapshot.futures.length > 0 && (
             <FuturesPanel
               futures={snapshot.futures}

@@ -1,82 +1,130 @@
 package com.fixedincomerisk.model;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
- * The correlation between the three correlated drivers, in the order short rate, Systemic Factor, Basis.
- * Validated on construction: 3×3, unit diagonal, symmetric, entries in [−1, 1], and
- * positive definite, which is checked by computing its Cholesky factor once.
+ * The correlation between the session's correlated drivers, each identified by name rather than by
+ * position: {@code shortRate.USD}, {@code systemic}, {@code fxSpot.EURUSD}, {@code basis}, and so on.
+ * The set is configuration, so a currency or a currency pair can be added without touching this class.
+ *
+ * <p>Validated on construction: square and the same size as the factor list, no duplicate names, unit
+ * diagonal, symmetric, entries in [−1, 1], and positive definite, which is checked by computing the
+ * Cholesky factor once.
  */
 public final class CorrelationMatrix {
 
-    public static final int SHORT_RATE = 0;
-    public static final int SYSTEMIC = 1;
-    public static final int BASIS = 2;
-    private static final int SIZE = 3;
     private static final double TOLERANCE = 1e-12;
 
+    private final List<String> factors;
+    private final Map<String, Integer> indices;
     private final double[][] correlations;
     private final double[][] cholesky;
 
-    public CorrelationMatrix(double[][] correlations) {
-        if (correlations.length != SIZE || Arrays.stream(correlations).anyMatch(row -> row.length != SIZE)) {
-            throw invalid("must be 3×3 (short rate, Systemic Factor, Basis)", correlations);
+    public CorrelationMatrix(List<String> factors, double[][] correlations) {
+        this.factors = List.copyOf(factors);
+        this.indices = index(this.factors);
+        int size = this.factors.size();
+        if (correlations.length != size || Arrays.stream(correlations).anyMatch(row -> row.length != size)) {
+            throw invalid(this.factors, "must be " + size + "×" + size + ", one row and column per factor",
+                    correlations);
         }
-        for (int i = 0; i < SIZE; i++) {
+        for (int i = 0; i < size; i++) {
             if (Math.abs(correlations[i][i] - 1) > TOLERANCE) {
-                throw invalid("must have 1 on the diagonal", correlations);
+                throw invalid(this.factors, "must have 1 on the diagonal", correlations);
             }
-            for (int j = 0; j < SIZE; j++) {
+            for (int j = 0; j < size; j++) {
                 if (!(Math.abs(correlations[i][j]) <= 1)) {
-                    throw invalid("entries must be between −1 and 1", correlations);
+                    throw invalid(this.factors, "entries must be between −1 and 1", correlations);
                 }
                 if (Math.abs(correlations[i][j] - correlations[j][i]) > TOLERANCE) {
-                    throw invalid("must be symmetric", correlations);
+                    throw invalid(this.factors, "must be symmetric", correlations);
                 }
             }
         }
         this.correlations = copy(correlations);
-        this.cholesky = cholesky(correlations);
+        this.cholesky = cholesky(this.factors, correlations);
     }
 
-    /** Independent drivers. */
-    public static CorrelationMatrix identity() {
-        return new CorrelationMatrix(new double[][] {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}});
+    /** Independent drivers, one per named factor. */
+    public static CorrelationMatrix independent(List<String> factors) {
+        double[][] identity = new double[factors.size()][factors.size()];
+        for (int i = 0; i < factors.size(); i++) {
+            identity[i][i] = 1;
+        }
+        return new CorrelationMatrix(factors, identity);
     }
 
-    /** A matrix from its three off-diagonal correlations. */
-    public static CorrelationMatrix of(double shortRateSystemic, double shortRateBasis, double systemicBasis) {
-        return new CorrelationMatrix(new double[][] {
-                {1, shortRateSystemic, shortRateBasis},
-                {shortRateSystemic, 1, systemicBasis},
-                {shortRateBasis, systemicBasis, 1}});
-    }
-
-    /** Parses rows separated by ';' and entries by ',', e.g. {@code 1,-0.3,0.1; -0.3,1,0; 0.1,0,1}. */
-    public static CorrelationMatrix parse(String text) {
+    /**
+     * Parses the factor names, separated by ',', and the matrix, rows separated by ';' and entries by ','
+     * — e.g. {@code "shortRate.USD, systemic, basis"} and {@code "1,-0.3,0.1; -0.3,1,0; 0.1,0,1"}.
+     */
+    public static CorrelationMatrix parse(String factorNames, String matrixText) {
+        List<String> names = Arrays.stream(factorNames.split(",")).map(String::trim).filter(n -> !n.isEmpty()).toList();
+        if (names.isEmpty()) {
+            throw new IllegalArgumentException("No correlated factors configured: " + factorNames);
+        }
         try {
-            double[][] rows = Arrays.stream(text.split(";"))
-                    .map(row -> Arrays.stream(row.split(",")).map(String::trim).mapToDouble(Double::parseDouble).toArray())
+            double[][] rows = Arrays.stream(matrixText.split(";"))
+                    .map(row -> Arrays.stream(row.split(",")).map(String::trim)
+                            .mapToDouble(Double::parseDouble).toArray())
                     .toArray(double[][]::new);
-            return new CorrelationMatrix(rows);
+            return new CorrelationMatrix(names, rows);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Correlation matrix is not numeric: " + text, e);
+            throw new IllegalArgumentException("Correlation matrix is not numeric: " + matrixText, e);
         }
     }
 
-    public double correlation(int i, int j) {
-        return correlations[i][j];
+    /** The factors in matrix order. */
+    public List<String> factors() {
+        return factors;
     }
 
-    /** Row {@code i} of the lower-triangular Cholesky factor L, with L·Lᵀ equal to this matrix. */
-    double[] choleskyRow(int i) {
-        return cholesky[i].clone();
+    public int size() {
+        return factors.size();
     }
 
-    private static double[][] cholesky(double[][] a) {
-        double[][] l = new double[SIZE][SIZE];
-        for (int i = 0; i < SIZE; i++) {
+    public boolean has(String factor) {
+        return indices.containsKey(factor);
+    }
+
+    /** The factor's position, or a failure naming the offender and listing what is configured. */
+    public int indexOf(String factor) {
+        Integer index = indices.get(factor);
+        if (index == null) {
+            throw new IllegalArgumentException("Unknown correlated factor '" + factor
+                    + "'; risk.correlation.factors names " + factors);
+        }
+        return index;
+    }
+
+    public double correlation(String a, String b) {
+        return correlations[indexOf(a)][indexOf(b)];
+    }
+
+    /** Row for {@code factor} of the lower-triangular Cholesky factor L, with L·Lᵀ equal to this matrix. */
+    double[] choleskyRow(String factor) {
+        return cholesky[indexOf(factor)].clone();
+    }
+
+    private static Map<String, Integer> index(List<String> factors) {
+        Map<String, Integer> indices = new LinkedHashMap<>();
+        for (int i = 0; i < factors.size(); i++) {
+            if (indices.put(factors.get(i), i) != null) {
+                throw new IllegalArgumentException("Duplicate correlated factor '" + factors.get(i)
+                        + "' in risk.correlation.factors " + factors);
+            }
+        }
+        return indices;
+    }
+
+    private static double[][] cholesky(List<String> factors, double[][] a) {
+        int size = factors.size();
+        double[][] l = new double[size][size];
+        for (int i = 0; i < size; i++) {
             for (int j = 0; j <= i; j++) {
                 double sum = a[i][j];
                 for (int k = 0; k < j; k++) {
@@ -84,7 +132,7 @@ public final class CorrelationMatrix {
                 }
                 if (i == j) {
                     if (sum <= TOLERANCE) {
-                        throw invalid("must be positive definite", a);
+                        throw invalid(factors, "must be positive definite", a);
                     }
                     l[i][i] = Math.sqrt(sum);
                 } else {
@@ -99,14 +147,13 @@ public final class CorrelationMatrix {
         return Arrays.stream(matrix).map(double[]::clone).toArray(double[][]::new);
     }
 
-    private static IllegalArgumentException invalid(String problem, double[][] matrix) {
+    private static IllegalArgumentException invalid(List<String> factors, String problem, double[][] matrix) {
         return new IllegalArgumentException(String.format(Locale.ROOT,
-                "Invalid correlation matrix (short rate, Systemic Factor, Basis): %s; got %s",
-                problem, Arrays.deepToString(matrix)));
+                "Invalid correlation matrix %s: %s; got %s", factors, problem, Arrays.deepToString(matrix)));
     }
 
     @Override
     public String toString() {
-        return Arrays.deepToString(correlations);
+        return factors + " " + Arrays.deepToString(correlations);
     }
 }

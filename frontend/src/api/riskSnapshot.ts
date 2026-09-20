@@ -22,6 +22,8 @@ export interface RiskSnapshot {
   credit: CreditView;
   /** Each interest rate swap's current floating period and its Fixing. */
   swaps: SwapView[];
+  /** The FX market and each FX Forward's terms, Fixing and quoted forward. */
+  fx: FxView;
 }
 
 /** A swap's floating leg as of the Valuation Date: the current coupon is known from its Fixing. */
@@ -117,9 +119,22 @@ export interface FactorStaleness {
 /** Mirrors RiskSnapshot.MAX_RECENT_LIFECYCLE_EVENTS on the backend. */
 export const MAX_RECENT_LIFECYCLE_EVENTS = 20;
 
+export type CurveSourceKind = 'LIVE' | 'CACHED' | 'BUNDLED';
+
+/** Where one currency's starting curve came from. The two can fall back independently. */
+export interface CurveSourceInfo {
+  currency: string;
+  source: CurveSourceKind;
+  date: string;
+  /** What the publisher quoted: Treasury publishes par yields, the ECB publishes spot rates. */
+  quotes: 'PAR_YIELD' | 'ZERO_RATE';
+}
+
 export interface SessionInfo {
-  curveSource: 'LIVE' | 'CACHED' | 'BUNDLED';
+  /** The Reporting Currency's Curve Source; `curves` carries every currency's. */
+  curveSource: CurveSourceKind;
   curveDate: string;
+  curves: CurveSourceInfo[];
   valuationDate: string;
   seed: number;
   simulatedSecondsPerTick: number;
@@ -137,10 +152,12 @@ export interface LifecycleEvent {
   positionId: string;
   instrumentId: string;
   description: string;
-  kind: 'COUPON' | 'REDEMPTION' | 'FIXED_LEG' | 'FLOATING_LEG';
+  kind: 'COUPON' | 'REDEMPTION' | 'FIXED_LEG' | 'FLOATING_LEG' | 'FX_LEG' | 'FX_SETTLEMENT';
   amountPer100: number;
   /** Paid to the Position; negative when short. */
   amount: number;
+  /** A deliverable FX Forward settles two legs in two currencies, so each event names its own. */
+  currency: string;
 }
 
 export interface PositionResult {
@@ -149,13 +166,22 @@ export interface PositionResult {
   instrumentType: string;
   description: string;
   quantity: number;
+  /** The currency the quantity is in; not the valuation currency for an FX Forward. */
+  notionalCurrency: string;
   cleanPrice: number;
   accruedInterest: number;
   dirtyPrice: number;
   value: number;
+  /** Across every curve, a basis point of each; only ratesByCurrency splits cleanly. */
   dv01: number;
   bucketedDv01: BucketDv01[];
+  /** One entry per currency the session simulates, in market order. */
+  ratesByCurrency: CurrencyRates[];
   cs01: number;
+  /** Value change for a 1% move in each currency against the Reporting Currency. */
+  fxDelta: CurrencyAmount[];
+  /** Value change for a one-pip move in each NDF pair's Forward Points, spot held fixed. */
+  pointsDelta: PairAmount[];
   /** The issuer's current Rating Bucket, for corporate bonds; otherwise null. */
   ratingBucket: string | null;
   /** The Tick this Position's Instrument was last repriced at. */
@@ -172,13 +198,33 @@ export interface BucketDv01 {
 /** Book-level risk rolled up from Position contributions. */
 export interface BookRisk {
   value: number;
+  /** The headline total: every curve bumped a basis point each. Label it RATES_TOTAL_LABEL. */
   dv01: number;
   bucketedDv01: BucketDv01[];
+  /** The rates risk that does net: every currency, including ones the Book has nothing in. */
+  ratesByCurrency: CurrencyRates[];
   cs01: number;
+  /** FX Delta per currency. There is deliberately no total: these are different risks. */
+  fxDeltaByCurrency: CurrencyAmount[];
+  /** Points delta per NDF pair, reported apart from FX Delta. */
+  pointsDeltaByPair: PairAmount[];
   byInstrumentType: InstrumentTypeRisk[];
   /** Every Rating Bucket, by each issuer's current rating, including empty ones. */
   byRatingBucket: RatingBucketRisk[];
 }
+
+/**
+ * One currency's rates risk, from bumping that currency's curve alone. This is the unit that nets: a euro
+ * basis point and a dollar one are different risks.
+ */
+export interface CurrencyRates {
+  currency: string;
+  dv01: number;
+  bucketedDv01: BucketDv01[];
+}
+
+/** Mirrors RatesSensitivities.TOTAL_LABEL on the backend: what a total across currencies must be called. */
+export const RATES_TOTAL_LABEL = 'all curves, 1bp each';
 
 export interface InstrumentTypeRisk {
   instrumentType: string;
@@ -238,4 +284,49 @@ export interface RiskUpdate {
   credit: CreditView;
   /** Every swap's current period and Fixing, on a Day Rollover; null if unchanged. */
   swaps: SwapView[] | null;
+  fx: FxView | null;
+}
+
+/** An amount attributed to one currency. Currencies do not net, so these are never summed together. */
+export interface CurrencyAmount {
+  currency: string;
+  amount: number;
+}
+
+/** An amount attributed to one currency pair. */
+export interface PairAmount {
+  pair: string;
+  amount: number;
+}
+
+/** The FX market behind the Book's FX Positions, and each contract's terms. */
+export interface FxView {
+  pairs: FxPairView[];
+  contracts: FxContractView[];
+}
+
+export interface FxPairView {
+  pair: string;
+  /** The side FX Delta is reported against. */
+  riskCurrency: string;
+  spot: number;
+  /** Forward Points in pips, or null for a deliverable pair, which has none. */
+  points: number | null;
+}
+
+export interface FxContractView {
+  instrumentId: string;
+  description: string;
+  kind: 'OUTRIGHT' | 'NDF';
+  pair: string;
+  direction: 'BUY_BASE' | 'SELL_BASE';
+  notionalCurrency: string;
+  contractRate: number;
+  /** Derived from two curves for an outright, quoted as spot plus points for an NDF. */
+  forwardRate: number;
+  /** The NDF's fixing date, or null for an outright, which has no fixing. */
+  fixingDate: string | null;
+  /** The recorded FX Fixing, or null while the fixing date is still ahead. */
+  fxFixing: number | null;
+  settlementDate: string;
 }

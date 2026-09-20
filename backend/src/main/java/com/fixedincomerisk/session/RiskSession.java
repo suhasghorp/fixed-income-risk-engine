@@ -1,10 +1,12 @@
 package com.fixedincomerisk.session;
 
 import com.fixedincomerisk.book.Position;
-import com.fixedincomerisk.curve.CurveBootstrapper;
 import com.fixedincomerisk.curve.CurveSnapshot;
-import com.fixedincomerisk.curve.DiscountCurve;
+import com.fixedincomerisk.curve.CurveSource;
+import com.fixedincomerisk.instrument.FxForward;
+import com.fixedincomerisk.instrument.FxNdf;
 import com.fixedincomerisk.instrument.Instrument;
+import com.fixedincomerisk.market.FxPair;
 import com.fixedincomerisk.market.MarketState;
 import com.fixedincomerisk.market.RiskFactorId;
 import com.fixedincomerisk.model.CorrelatedShockGenerator;
@@ -12,9 +14,16 @@ import com.fixedincomerisk.model.HullWhiteModel;
 import com.fixedincomerisk.repricing.MaterialDependencies;
 import com.fixedincomerisk.repricing.RepricingEngine;
 import com.fixedincomerisk.risk.CurveSensitivities;
+import com.fixedincomerisk.risk.RatesSensitivities;
 import com.fixedincomerisk.risk.SensitivityCalculator;
 import com.fixedincomerisk.session.RiskSnapshot.BookRisk;
 import com.fixedincomerisk.session.RiskSnapshot.CtdSwitchEvent;
+import com.fixedincomerisk.session.RiskSnapshot.CurrencyAmount;
+import com.fixedincomerisk.session.RiskSnapshot.PairAmount;
+import com.fixedincomerisk.session.RiskSnapshot.FxView;
+import com.fixedincomerisk.session.RiskSnapshot.FxPairView;
+import com.fixedincomerisk.session.RiskSnapshot.FxContractView;
+import com.fixedincomerisk.session.RiskSnapshot.CurrencyRates;
 import com.fixedincomerisk.session.RiskSnapshot.FactorStaleness;
 import com.fixedincomerisk.session.RiskSnapshot.LifecycleEvent;
 import com.fixedincomerisk.session.RiskSnapshot.PositionResult;
@@ -26,6 +35,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -33,8 +43,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /**
- * The in-process entry point to the risk engine. Built from a {@link SessionConfig}: loads the curve
- * from the Curve Source, bootstraps it, calibrates Hull-White, and prices the Book.
+ * The in-process entry point to the risk engine. Built from a {@link SessionConfig}: loads each currency's
+ * curve from its Curve Source, bootstraps it, calibrates that currency's Hull-White model, and prices the
+ * Book.
  *
  * <p>It has two sides that can run on different threads:
  * <ul>
@@ -73,9 +84,10 @@ public final class RiskSession implements AutoCloseable {
     private List<LifecycleEvent> recentLifecycleEvents = List.of();
     private List<CtdSwitchEvent> recentCtdSwitches = List.of();
 
-    private RiskSession(SessionConfig config, CurveSnapshot curveSnapshot, HullWhiteModel model) {
+    private RiskSession(SessionConfig config, Map<String, CurveSnapshot> curveSnapshots,
+                        Map<String, HullWhiteModel> models) {
         this.config = config;
-        this.simulator = new MarketSimulator(config, curveSnapshot, model);
+        this.simulator = new MarketSimulator(config, curveSnapshots, models);
         this.sensitivities = new SensitivityCalculator(config.pillars());
         this.repricing = new RepricingEngine(config.repricing().thresholds());
         this.ratingBucketLabels = config.referenceData().ratingBuckets().stream()
@@ -91,11 +103,17 @@ public final class RiskSession implements AutoCloseable {
         reprice(MarketTicks.of(simulator.opening()));
     }
 
+    /** Loads and calibrates one curve per currency, each from its own Curve Source and parameters. */
     public static RiskSession create(SessionConfig config) {
-        CurveSnapshot curveSnapshot = config.curveSource().load();
-        DiscountCurve initialCurve = CurveBootstrapper.bootstrap(curveSnapshot.curve());
-        HullWhiteModel model = HullWhiteModel.calibrate(initialCurve, config.hullWhite());
-        return new RiskSession(config, curveSnapshot, model);
+        Map<String, CurveSnapshot> curveSnapshots = new LinkedHashMap<>();
+        Map<String, HullWhiteModel> models = new LinkedHashMap<>();
+        for (CurveSource source : config.curveSources()) {
+            CurveSnapshot snapshot = source.load();
+            curveSnapshots.put(source.currency(), snapshot);
+            models.put(source.currency(), HullWhiteModel.calibrate(
+                    snapshot.curve(), config.hullWhite(source.currency())));
+        }
+        return new RiskSession(config, curveSnapshots, models);
     }
 
     /** Advances exactly one Tick and prices it: a cycle with nothing coalesced. */
@@ -138,14 +156,41 @@ public final class RiskSession implements AutoCloseable {
                 repriced, repriced.isEmpty() ? null : bookRisk,
                 new RiskUpdate.CurveChange(latest.curve().pillars(), latest.curve().points()),
                 ticks.lifecycleEvents(), telemetry, latest.futures(), ticks.ctdSwitches(), latest.credit(),
-                ticks.dayRollover() ? latest.swaps() : null);
+                ticks.dayRollover() ? latest.swaps() : null,
+                fxView(latest.market()));
     }
 
     /** Pricing side: a complete picture as of the latest priced cycle. */
     public RiskSnapshot snapshot() {
         return new RiskSnapshot(sequence, priced.tick(), priced.ticksUntilDayRollover(), sessionInfo(),
                 List.copyOf(positions.values()), bookRisk, priced.curve(), recentLifecycleEvents, telemetry,
-                priced.futures(), recentCtdSwitches, priced.credit(), priced.swaps());
+                priced.futures(), recentCtdSwitches, priced.credit(), priced.swaps(), fxView(priced.market()));
+    }
+
+    /** The FX market behind the Book's FX Positions, and each contract's terms against today's forward. */
+    private FxView fxView(MarketState market) {
+        List<FxPairView> pairs = new ArrayList<>();
+        for (FxPair pair : config.fxPairs().pairs()) {
+            pairs.add(new FxPairView(pair.pair(), pair.riskCurrency(), market.fx().spot(pair.pair()),
+                    pair.quotesPoints() ? market.fx().points(pair.pair()) : null));
+        }
+        List<FxContractView> contracts = new ArrayList<>();
+        for (Instrument instrument : config.referenceData().book().positions().stream()
+                .map(Position::instrument).distinct().toList()) {
+            if (instrument instanceof FxForward outright) {
+                contracts.add(new FxContractView(outright.id(), outright.description(), "OUTRIGHT",
+                        outright.pair().pair(), outright.direction().name(), outright.notionalCurrency(),
+                        outright.contractRate(), outright.forwardRate(market), null, null,
+                        outright.maturityDate().toString()));
+            } else if (instrument instanceof FxNdf ndf) {
+                contracts.add(new FxContractView(ndf.id(), ndf.description(), "NDF", ndf.pair().pair(),
+                        ndf.direction().name(), ndf.notionalCurrency(), ndf.contractRate(),
+                        ndf.forwardRate(market), ndf.fixingDate().toString(),
+                        market.fx().fixings().on(ndf.pair().pair(), ndf.fixingDate()).orElse(null),
+                        ndf.settlementDate().toString()));
+            }
+        }
+        return new FxView(pairs, contracts);
     }
 
     /** The market of the latest priced cycle. */
@@ -196,7 +241,8 @@ public final class RiskSession implements AutoCloseable {
             }
         }
         if (!changed.isEmpty()) {
-            bookRisk = BookRollups.rollUp(List.copyOf(positions.values()), config.pillars(), ratingBucketLabels);
+            bookRisk = BookRollups.rollUp(List.copyOf(positions.values()), config.pillars(), market.currencies(),
+                    ratingBucketLabels);
         }
         totalTicksCoalesced += ticks.coalesced();
         telemetry = telemetry(repriced.size(), market, ticks.coalesced());
@@ -237,32 +283,57 @@ public final class RiskSession implements AutoCloseable {
     private Priced price(Instrument instrument, MarketState market, long tick) {
         double dirty = instrument.dirtyValue(market);
         double accrued = instrument.accruedInterest(market.valuationDate());
-        CurveSensitivities perUnit = sensitivities.curveSensitivities(instrument, market);
+        RatesSensitivities perUnit = sensitivities.ratesSensitivities(instrument, market);
         double cs01 = sensitivities.cs01(instrument, market);
+        Map<String, Double> fxDelta = sensitivities.fxDelta(instrument, market, config.fxPairs());
+        Map<String, Double> pointsDelta = sensitivities.pointsDelta(instrument, market, config.fxPairs());
         Set<RiskFactorId> dependencies = MaterialDependencies.of(instrument.riskFactors(market, config.pillars()),
                 config.pillars(), perUnit, config.repricing().minPillarExposure());
-        return new Priced(instrument, dependencies, new InstrumentResult(dirty, accrued, perUnit, cs01, tick));
+        return new Priced(instrument, dependencies,
+                new InstrumentResult(dirty, accrued, perUnit, cs01, fxDelta, pointsDelta, tick));
     }
 
     private PositionResult positionResult(Position position, MarketState market) {
         Instrument instrument = position.instrument();
         InstrumentResult result = instrumentResults.get(instrument.id());
-        CurveSensitivities risk = result.perUnit().scaledBy(position.quantity());
+        RatesSensitivities risk = result.perUnit().scaledBy(position.quantity());
         return new PositionResult(
                 position.positionId(),
                 instrument.id(),
                 instrument.type().name(),
                 instrument.description(),
                 position.quantity(),
+                instrument.notionalCurrency(),
                 (result.dirty() - result.accrued()) * 100,
                 result.accrued() * 100,
                 result.dirty() * 100,
                 instrument.marginedDaily() ? 0 : result.dirty() * position.quantity(),
-                risk.dv01(),
-                BookRollups.bucketDv01s(config.pillars(), risk.bucketedDv01()),
+                risk.totalDv01(),
+                BookRollups.bucketDv01s(config.pillars(), risk.totalBucketedDv01()),
+                ratesByCurrency(risk),
                 result.cs01() * position.quantity() + 0.0,
+                scaled(result.fxDelta(), position.quantity(), CurrencyAmount::new),
+                scaled(result.pointsDelta(), position.quantity(), PairAmount::new),
                 instrument.issuer().map(issuer -> market.credit().rating(issuer)).orElse(null),
                 result.tick());
+    }
+
+    /** A per-unit sensitivity map times the Position quantity, in the map's own order. */
+    private static <T> List<T> scaled(Map<String, Double> perUnit, double quantity,
+                                      BiFunction<String, Double, T> toAmount) {
+        List<T> amounts = new ArrayList<>();
+        perUnit.forEach((key, value) -> amounts.add(toAmount.apply(key, value * quantity + 0.0)));
+        return amounts;
+    }
+
+    private List<CurrencyRates> ratesByCurrency(RatesSensitivities risk) {
+        List<CurrencyRates> rates = new ArrayList<>();
+        risk.currencies().forEach(currency -> {
+            CurveSensitivities inCurrency = risk.in(currency);
+            rates.add(new CurrencyRates(currency, inCurrency.dv01(),
+                    BookRollups.bucketDv01s(config.pillars(), inCurrency.bucketedDv01())));
+        });
+        return rates;
     }
 
     private RepricingTelemetry telemetry(int instrumentsRepriced, MarketState market, int ticksCoalesced) {
@@ -279,10 +350,18 @@ public final class RiskSession implements AutoCloseable {
     }
 
     private SessionInfo sessionInfo() {
-        CurveSnapshot curveSnapshot = simulator.curveSnapshot();
+        CurveSnapshot curveSnapshot = simulator.curveSnapshot(config.reportingCurrency());
+        List<RiskSnapshot.CurveSourceInfo> curves = config.currencies().stream()
+                .map(currency -> {
+                    CurveSnapshot snapshot = simulator.curveSnapshot(currency);
+                    return new RiskSnapshot.CurveSourceInfo(currency, snapshot.source().name(),
+                            snapshot.curveDate().toString(), snapshot.quoteKind().name());
+                })
+                .toList();
         return new SessionInfo(
                 curveSnapshot.source().name(),
-                curveSnapshot.curve().curveDate().toString(),
+                curveSnapshot.curveDate().toString(),
+                curves,
                 priced.market().valuationDate().toString(),
                 config.simulation().seed(),
                 config.simulation().simulatedTimePerTick().toSeconds(),
@@ -291,7 +370,8 @@ public final class RiskSession implements AutoCloseable {
     }
 
     /** One Instrument's per-unit price and risk, as of the Tick it was last priced. */
-    private record InstrumentResult(double dirty, double accrued, CurveSensitivities perUnit, double cs01, long tick) {
+    private record InstrumentResult(double dirty, double accrued, RatesSensitivities perUnit, double cs01,
+                                    Map<String, Double> fxDelta, Map<String, Double> pointsDelta, long tick) {
     }
 
     /** The outcome of pricing one Instrument, before it is applied to the session's state. */

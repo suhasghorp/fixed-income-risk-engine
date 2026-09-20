@@ -31,6 +31,6 @@ class TreasuryParCurveCsvTest {
         CurveSnapshot snapshot = new BundledCurveSource().load();
 
         assertThat(snapshot.source()).isEqualTo(CurveSourceKind.BUNDLED);
-        assertThat(snapshot.curve().points()).hasSizeGreaterThan(10);
+        assertThat(snapshot.quotes()).hasSizeGreaterThan(10);
     }
 }

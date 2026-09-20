@@ -7,8 +7,13 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import com.fixedincomerisk.credit.CreditEventParameters;
 import com.fixedincomerisk.credit.CreditParameters;
 import com.fixedincomerisk.curve.BundledCurveSource;
+import com.fixedincomerisk.curve.BundledEcbCurveSource;
+import com.fixedincomerisk.curve.EcbTenors;
 import com.fixedincomerisk.market.Pillar;
+import com.fixedincomerisk.market.FxPairs;
 import com.fixedincomerisk.model.CorrelationMatrix;
+import com.fixedincomerisk.model.FxSpotParameters;
+import com.fixedincomerisk.model.NdfPointsParameters;
 import com.fixedincomerisk.model.FuturesBasisParameters;
 import com.fixedincomerisk.model.HullWhiteParameters;
 import com.fixedincomerisk.refdata.ReferenceData;
@@ -18,19 +23,27 @@ import com.fixedincomerisk.session.RiskSession;
 import com.fixedincomerisk.session.SessionConfig;
 import com.fixedincomerisk.simulation.SimulationSettings;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class SimulationLoopTest {
 
     private static RiskSession session(long stopAtTick) {
         return RiskSession.create(new SessionConfig(
-                new BundledCurveSource(),
+                List.of(new BundledCurveSource(), new BundledEcbCurveSource(EcbTenors.fromClasspath())),
+                "USD",
                 ReferenceData.fromClasspath(),
-                new HullWhiteParameters(0.05, 0.01),
+                Map.of("USD", new HullWhiteParameters(0.05, 0.01),
+                        "EUR", new HullWhiteParameters(0.04, 0.007)),
                 new FuturesBasisParameters(12, -0.2, 0.5, 24, 0.15),
+                FxPairs.fromClasspath(),
+                Map.of("EURUSD", new FxSpotParameters(0.08), "USDKRW", new FxSpotParameters(0.09)),
+                Map.of("USDKRW", new NdfPointsParameters(12, -150, 40)),
                 new CreditParameters(0.5, 60, 40, 2, 25, 20, 15),
                 CreditEventParameters.NONE,
-                CorrelationMatrix.identity(),
+                CorrelationMatrix.independent(List.of("shortRate.USD", "shortRate.EUR",
+                        "fxSpot.EURUSD", "fxSpot.USDKRW", "ndfPoints.USDKRW", "systemic", "basis")),
                 Pillar.DEFAULTS,
                 new SimulationSettings(42, Duration.ofHours(1), 24, stopAtTick),
                 RepricingSettings.REPRICE_EVERYTHING));

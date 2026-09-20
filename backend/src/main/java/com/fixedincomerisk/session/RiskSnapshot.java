@@ -23,6 +23,7 @@ import java.util.Map;
  *                               {@link #MAX_RECENT_CTD_SWITCHES}
  * @param credit                 the observable credit market and each issuer's Mark and observations
  * @param swaps                  each interest rate swap's current floating period and its Fixing
+ * @param fx                     the FX market and each FX Forward's terms, Fixing and quoted forward
  */
 public record RiskSnapshot(
         long sequence,
@@ -37,7 +38,8 @@ public record RiskSnapshot(
         List<FuturesView> futures,
         List<CtdSwitchEvent> recentCtdSwitches,
         CreditView credit,
-        List<SwapView> swaps) {
+        List<SwapView> swaps,
+        FxView fx) {
 
     public static final int MAX_RECENT_LIFECYCLE_EVENTS = 20;
     public static final int MAX_RECENT_CTD_SWITCHES = 20;
@@ -78,7 +80,8 @@ public record RiskSnapshot(
                 appendRecent(recentLifecycleEvents, update.lifecycleEvents(), MAX_RECENT_LIFECYCLE_EVENTS),
                 update.telemetry(), update.futures(),
                 appendRecent(recentCtdSwitches, update.ctdSwitches(), MAX_RECENT_CTD_SWITCHES), update.credit(),
-                update.swaps() == null ? swaps : update.swaps());
+                update.swaps() == null ? swaps : update.swaps(),
+                update.fx() == null ? fx : update.fx());
     }
 
     /**
@@ -87,48 +90,97 @@ public record RiskSnapshot(
      * @param ticksPerDay                 Ticks per simulated day, between Day Rollovers
      * @param stopAtTick                  the Tick the simulation stops at, or null if it runs indefinitely
      */
+    /**
+     * @param curveSource the Reporting Currency's Curve Source; {@code curves} has every currency's
+     * @param curveDate   the Reporting Currency's curve date, likewise
+     * @param curves      one entry per currency the session simulates, in market order
+     */
     public record SessionInfo(
             String curveSource,
             String curveDate,
+            List<CurveSourceInfo> curves,
             String valuationDate,
             long seed,
             long simulatedSecondsPerTick,
             int ticksPerDay,
             Long stopAtTick) {
 
+        public SessionInfo {
+            curves = List.copyOf(curves);
+        }
+
         SessionInfo withValuationDate(String newValuationDate) {
-            return new SessionInfo(curveSource, curveDate, newValuationDate, seed, simulatedSecondsPerTick,
-                    ticksPerDay, stopAtTick);
+            return new SessionInfo(curveSource, curveDate, curves, newValuationDate, seed,
+                    simulatedSecondsPerTick, ticksPerDay, stopAtTick);
         }
     }
 
+    /**
+     * Where one currency's starting curve came from. Reported per currency, because the two arrive by
+     * different routes and can fall back independently: Treasury's par curve may be live while the ECB's
+     * spot rates come from the bundled snapshot.
+     *
+     * @param source LIVE, CACHED or BUNDLED
+     * @param quotes what the publisher quoted: PAR_YIELD or ZERO_RATE
+     */
+    public record CurveSourceInfo(String currency, String source, String date, String quotes) {
+    }
+
+    /**
+     * @param dv01           across every curve, a basis point of each; the per-currency split is in
+     *                       {@code ratesByCurrency}, and only that splits cleanly
+     * @param bucketedDv01   likewise, summed across currencies at each Pillar
+     * @param ratesByCurrency one entry per currency the session simulates, in market order
+     */
     public record PositionResult(
             String positionId,
             String instrumentId,
             String instrumentType,
             String description,
             double quantity,
+            /** The currency the quantity is denominated in; not the valuation currency for an FX Forward. */
+            String notionalCurrency,
             double cleanPrice,
             double accruedInterest,
             double dirtyPrice,
             double value,
             double dv01,
             List<BucketDv01> bucketedDv01,
+            List<CurrencyRates> ratesByCurrency,
             double cs01,
+            /** Value change for a 1% move in each currency against the Reporting Currency. */
+            List<CurrencyAmount> fxDelta,
+            /** Value change for a one-pip move in each NDF pair's Forward Points, spot held fixed. */
+            List<PairAmount> pointsDelta,
             String ratingBucket,
             long lastPricedTick) {
 
         public PositionResult {
             bucketedDv01 = List.copyOf(bucketedDv01);
+            ratesByCurrency = List.copyOf(ratesByCurrency);
+            fxDelta = List.copyOf(fxDelta);
+            pointsDelta = List.copyOf(pointsDelta);
         }
+    }
+
+    /** An amount attributed to one currency. Currencies do not net, so these are never summed together. */
+    public record CurrencyAmount(String currency, double amount) {
+    }
+
+    /** An amount attributed to one currency pair. */
+    public record PairAmount(String pair, double amount) {
     }
 
     /**
      * Book-level risk rolled up from Position contributions.
      *
      * @param value            Book dirty value, the sum of Position values
-     * @param dv01             Book DV01, the sum of Position DV01s
-     * @param bucketedDv01     Book Bucketed DV01, one entry per Pillar
+     * @param dv01             the headline total: every curve bumped a basis point each, which is not a
+     *                         basis point of any one currency. Shown as
+     *                         {@value com.fixedincomerisk.risk.RatesSensitivities#TOTAL_LABEL}.
+     * @param bucketedDv01     the same total per Pillar
+     * @param ratesByCurrency  the rates risk that does net: one entry per currency, each from bumping that
+     *                         currency's curve alone; every currency is listed, even with nothing in it
      * @param cs01             Book CS01, the sum of Position CS01s
      * @param byInstrumentType totals per Instrument type, for the types held in the Book
      * @param byRatingBucket   totals per Rating Bucket, by each issuer's current rating; every bucket is
@@ -138,14 +190,33 @@ public record RiskSnapshot(
             double value,
             double dv01,
             List<BucketDv01> bucketedDv01,
+            List<CurrencyRates> ratesByCurrency,
             double cs01,
+            /** FX Delta per currency. There is deliberately no total: these are different risks. */
+            List<CurrencyAmount> fxDeltaByCurrency,
+            /** Points delta per NDF pair, reported apart from FX Delta as a future's Basis is from its DV01. */
+            List<PairAmount> pointsDeltaByPair,
             List<InstrumentTypeRisk> byInstrumentType,
             List<RatingBucketRisk> byRatingBucket) {
 
         public BookRisk {
             bucketedDv01 = List.copyOf(bucketedDv01);
+            ratesByCurrency = List.copyOf(ratesByCurrency);
+            fxDeltaByCurrency = List.copyOf(fxDeltaByCurrency);
+            pointsDeltaByPair = List.copyOf(pointsDeltaByPair);
             byInstrumentType = List.copyOf(byInstrumentType);
             byRatingBucket = List.copyOf(byRatingBucket);
+        }
+    }
+
+    /**
+     * One currency's rates risk, from bumping that currency's curve alone with every other curve held
+     * fixed. This is the unit that nets: a euro basis point and a dollar one are different risks.
+     */
+    public record CurrencyRates(String currency, double dv01, List<BucketDv01> bucketedDv01) {
+
+        public CurrencyRates {
+            bucketedDv01 = List.copyOf(bucketedDv01);
         }
     }
 
@@ -211,7 +282,9 @@ public record RiskSnapshot(
             String description,
             String kind,
             double amountPer100,
-            double amount) {
+            double amount,
+            /** A deliverable FX Forward settles two legs in two currencies, so each event names its own. */
+            String currency) {
     }
 
     /**
@@ -292,6 +365,46 @@ public record RiskSnapshot(
     }
 
     public record CurveView(List<CurvePoint> pillars, List<CurvePoint> points, List<ParInput> parInputs) {
+    }
+
+    /**
+     * The FX market behind the Book's FX Positions: the simulated rates, and each contract's terms next
+     * to the rate it would be struck at today. The panel exists so the article can show the market data
+     * behind the price, as the swaps and futures panels do.
+     */
+    public record FxView(List<FxPairView> pairs, List<FxContractView> contracts) {
+
+        public FxView {
+            pairs = List.copyOf(pairs);
+            contracts = List.copyOf(contracts);
+        }
+    }
+
+    /**
+     * @param riskCurrency the side FX Delta is reported against
+     * @param points       Forward Points in pips, or null for a deliverable pair, which has none
+     */
+    public record FxPairView(String pair, String riskCurrency, double spot, Double points) {
+    }
+
+    /**
+     * @param kind         OUTRIGHT or NDF
+     * @param forwardRate  derived from two curves for an outright, quoted as spot plus points for an NDF
+     * @param fixingDate   the NDF's fixing date, or null for an outright, which has no fixing
+     * @param fxFixing     the recorded FX Fixing, or null while the fixing date is still ahead
+     */
+    public record FxContractView(
+            String instrumentId,
+            String description,
+            String kind,
+            String pair,
+            String direction,
+            String notionalCurrency,
+            double contractRate,
+            double forwardRate,
+            String fixingDate,
+            Double fxFixing,
+            String settlementDate) {
     }
 
     /** A continuously compounded zero rate at a tenor. */

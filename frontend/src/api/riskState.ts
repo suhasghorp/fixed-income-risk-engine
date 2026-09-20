@@ -61,6 +61,7 @@ function applyUpdate(snapshot: RiskSnapshot, update: RiskUpdate): RiskSnapshot {
     recentCtdSwitches: appendRecent(snapshot.recentCtdSwitches, update.ctdSwitches, MAX_RECENT_CTD_SWITCHES),
     credit: update.credit,
     swaps: update.swaps ?? snapshot.swaps,
+    fx: update.fx ?? snapshot.fx,
   };
 }
 

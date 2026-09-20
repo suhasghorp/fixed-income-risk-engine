@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 class HullWhiteSimulatorTest {
 
     private static final HullWhiteParameters PARAMETERS = new HullWhiteParameters(0.05, 0.01);
-    private static final DiscountCurve CURVE = CurveBootstrapper.bootstrap(new BundledCurveSource().load().curve());
+    private static final DiscountCurve CURVE = new BundledCurveSource().load().curve();
     private static final HullWhiteModel MODEL = HullWhiteModel.calibrate(CURVE, PARAMETERS);
 
     @Test

@@ -50,7 +50,7 @@ class CurveBootstrapperTest {
 
     @Test
     void everyPublishedParInstrumentRepricesToParOnTheBundledCurve() {
-        ParCurve parCurve = new BundledCurveSource().load().curve();
+        ParCurve parCurve = (ParCurve) new BundledCurveSource().load().published();
 
         DiscountCurve curve = CurveBootstrapper.bootstrap(parCurve);
 
@@ -61,7 +61,7 @@ class CurveBootstrapperTest {
 
     @Test
     void discountFactorsDecreaseAndForwardsStayPositiveOnTheBundledCurve() {
-        DiscountCurve curve = CurveBootstrapper.bootstrap(new BundledCurveSource().load().curve());
+        DiscountCurve curve = new BundledCurveSource().load().curve();
 
         double previous = 1.0;
         for (double t = 0.05; t <= 40; t += 0.05) {

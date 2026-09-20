@@ -10,7 +10,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import type { BookRisk } from '../api/riskSnapshot';
+import { RATES_TOTAL_LABEL, type BookRisk } from '../api/riskSnapshot';
 import { formatDv01, formatMoney } from '../format';
 
 const INSTRUMENT_TYPE_LABEL: Record<string, string> = {
@@ -18,6 +18,8 @@ const INSTRUMENT_TYPE_LABEL: Record<string, string> = {
   TREASURY_FUTURE: 'Treasury futures',
   CORPORATE_BOND: 'Corporates',
   INTEREST_RATE_SWAP: 'Swaps',
+  FX_FORWARD: 'FX outrights',
+  FX_NDF: 'NDFs',
 };
 
 const GRID_STEP = 1_000;
@@ -53,7 +55,8 @@ export function BookRiskPanel({ bookRisk }: { bookRisk: BookRisk }) {
       <header className="card-header">
         <h2>Book risk</h2>
         <p className="muted">
-          USD per 1bp fall, on dirty value: DV01 in zero rates, CS01 in issuer Marks. Positive risk gains as rates or spreads fall.
+          USD per 1bp fall, on dirty value: DV01 in zero rates, CS01 in issuer Marks. Rates risk is measured one curve at a
+          time; the headline adds a basis point of each. Positive risk gains as rates or spreads fall.
         </p>
       </header>
       <div className="risk-grid">
@@ -62,7 +65,7 @@ export function BookRiskPanel({ bookRisk }: { bookRisk: BookRisk }) {
             <div className="stat">
               <span className="stat-label">Book DV01</span>
               <span className={`stat-value num ${bookRisk.dv01 < 0 ? 'short' : ''}`}>{formatDv01(bookRisk.dv01)}</span>
-              <span className="muted">1bp parallel shift</span>
+              <span className="muted">{RATES_TOTAL_LABEL}</span>
             </div>
             <div className="stat">
               <span className="stat-label">Book CS01</span>
@@ -70,6 +73,90 @@ export function BookRiskPanel({ bookRisk }: { bookRisk: BookRisk }) {
               <span className="muted">1bp on every Mark</span>
             </div>
           </div>
+          <table className="compact">
+            <caption className="muted">DV01 by currency (that curve bumped 1bp, the others held fixed)</caption>
+            <thead>
+              <tr>
+                <th>Currency</th>
+                <th className="num">DV01</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bookRisk.ratesByCurrency.map((c) => (
+                <tr key={c.currency} className={c.dv01 === 0 ? 'muted' : undefined}>
+                  <td>{c.currency}</td>
+                  <td className={`num ${c.dv01 < 0 ? 'short' : ''}`}>{formatDv01(c.dv01)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <table className="compact">
+            <caption className="muted">Bucketed DV01 by currency (that curve bumped, the others held fixed)</caption>
+            <thead>
+              <tr>
+                <th>Currency</th>
+                {(bookRisk.ratesByCurrency[0]?.bucketedDv01 ?? []).map((b) => (
+                  <th key={b.pillar} className="num">
+                    {b.pillar}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {bookRisk.ratesByCurrency.map((c) => (
+                <tr key={c.currency} className={c.dv01 === 0 ? 'muted' : undefined}>
+                  <td>{c.currency}</td>
+                  {c.bucketedDv01.map((b) => (
+                    <td key={b.pillar} className={`num ${b.dv01 < 0 ? 'short' : ''}`}>
+                      {Math.abs(b.dv01) < 0.5 ? '—' : formatDv01(b.dv01)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {bookRisk.fxDeltaByCurrency.length > 0 && (
+            <table className="compact">
+              <caption className="muted">
+                FX Delta by currency, per 1% move against USD. There is no total: these do not net.
+              </caption>
+              <thead>
+                <tr>
+                  <th>Currency</th>
+                  <th className="num">FX Delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bookRisk.fxDeltaByCurrency.map((d) => (
+                  <tr key={d.currency} className={d.amount === 0 ? 'muted' : undefined}>
+                    <td>{d.currency}</td>
+                    <td className={`num ${d.amount < 0 ? 'short' : ''}`}>{formatDv01(d.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {bookRisk.pointsDeltaByPair.length > 0 && (
+            <table className="compact">
+              <caption className="muted">
+                Forward Points delta by pair, per pip with spot held fixed — as a future's DV01 holds its Basis fixed
+              </caption>
+              <thead>
+                <tr>
+                  <th>Pair</th>
+                  <th className="num">Points delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bookRisk.pointsDeltaByPair.map((d) => (
+                  <tr key={d.pair} className={d.amount === 0 ? 'muted' : undefined}>
+                    <td className="mono">{d.pair}</td>
+                    <td className={`num ${d.amount < 0 ? 'short' : ''}`}>{formatDv01(d.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
           <table className="compact">
             <caption className="muted">By Instrument type</caption>
             <thead>
@@ -116,7 +203,7 @@ export function BookRiskPanel({ bookRisk }: { bookRisk: BookRisk }) {
           </table>
         </div>
         <figure className="bucketed">
-          <figcaption className="muted">Bucketed DV01 by Pillar</figcaption>
+          <figcaption className="muted">Bucketed DV01 by Pillar ({RATES_TOTAL_LABEL})</figcaption>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
               <CartesianGrid stroke="var(--grid)" vertical={false} />

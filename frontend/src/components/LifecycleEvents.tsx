@@ -6,6 +6,8 @@ const KIND_LABEL: Record<LifecycleEvent['kind'], string> = {
   REDEMPTION: 'Redemption',
   FIXED_LEG: 'Swap fixed leg',
   FLOATING_LEG: 'Swap floating leg',
+  FX_LEG: 'FX Forward leg',
+  FX_SETTLEMENT: 'NDF settlement',
 };
 
 export function LifecycleEvents({ events }: { events: LifecycleEvent[] }) {
@@ -44,7 +46,10 @@ export function LifecycleEvents({ events }: { events: LifecycleEvent[] }) {
                   <td>{e.positionId}</td>
                   <td>{e.description}</td>
                   <td className="num">{formatPrice(e.amountPer100)}</td>
-                  <td className={`num ${e.amount < 0 ? 'short' : ''}`}>{formatMoney(e.amount)}</td>
+                  <td className={`num ${e.amount < 0 ? 'short' : ''}`} title={`Paid in ${e.currency}`}>
+                    {formatMoney(e.amount)}
+                    <span className="ccy-suffix">{e.currency}</span>
+                  </td>
                 </tr>
               ))}
             </tbody>

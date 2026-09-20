@@ -33,23 +33,23 @@ public final class FixingHistory {
     }
 
     /**
-     * The index rate for {@code resetDate} implied by {@code market}'s curve: the simple ACT/360 forward rate
-     * from the reset date to three months later. For a reset date before the Valuation Date, as when
-     * seeding a period already running at startup, the curve is extended backwards at its short rate,
-     * since a curve starting today cannot see the past.
+     * The index rate for {@code resetDate} implied by {@code currency}'s curve in {@code market}: the simple
+     * ACT/360 forward rate from the reset date to three months later. For a reset date before the Valuation
+     * Date, as when seeding a period already running at startup, the curve is extended backwards at its
+     * short rate, since a curve starting today cannot see the past.
      */
-    public static double indexRate(MarketState market, LocalDate resetDate) {
+    public static double indexRate(MarketState market, String currency, LocalDate resetDate) {
         LocalDate end = resetDate.plusMonths(INDEX_TENOR_MONTHS);
         double accrual = ChronoUnit.DAYS.between(resetDate, end) / 360.0;
-        return (discountFactor(market, resetDate) / discountFactor(market, end) - 1) / accrual;
+        return (discountFactor(market, currency, resetDate) / discountFactor(market, currency, end) - 1) / accrual;
     }
 
-    private static double discountFactor(MarketState market, LocalDate date) {
+    private static double discountFactor(MarketState market, String currency, LocalDate date) {
+        YieldCurve curve = market.curve(currency);
         double t = YearFractions.act365(market.valuationDate(), date);
         if (t > 0) {
-            return market.curve().discountFactor(t);
+            return curve.discountFactor(t);
         }
-        double shortRate = market.curve().zeroRate(1 / 365.0);
-        return Math.exp(-shortRate * t);
+        return Math.exp(-curve.zeroRate(1 / 365.0) * t);
     }
 }

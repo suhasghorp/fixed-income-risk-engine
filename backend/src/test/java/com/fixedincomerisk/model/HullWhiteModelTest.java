@@ -15,7 +15,7 @@ class HullWhiteModelTest {
 
     @Test
     void reproducesTheBootstrappedCurveAtTimeZero() {
-        DiscountCurve bootstrapped = CurveBootstrapper.bootstrap(new BundledCurveSource().load().curve());
+        DiscountCurve bootstrapped = new BundledCurveSource().load().curve();
         HullWhiteModel model = HullWhiteModel.calibrate(bootstrapped, PARAMETERS);
 
         YieldCurve modelCurve = model.curveAt(0, model.initialShortRate());

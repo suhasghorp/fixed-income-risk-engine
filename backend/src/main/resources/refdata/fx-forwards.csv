@@ -1,0 +1,13 @@
+# FX Forward terms. `kind` is OUTRIGHT for a deliverable forward and NDF for a non-deliverable one; the
+# fixing date is blank for an outright, which has no fixing because both legs settle in full.
+#
+# `contractRate` is quote-currency units per unit of base currency, matching refdata/fx-pairs.csv, and
+# `direction` is which side of the BASE currency the holder bought. The notional is the Position's
+# quantity, in the Notional Currency: EUR for the outright, USD for the NDF, because that is what each
+# market strikes on.
+#
+# Tenors are chosen so the demo shows both states: the NDF fixes and settles inside a run of about 770
+# ticks, while the outright stays alive throughout, so the screen always has a live two-currency valuation.
+instrumentId,kind,pair,direction,contractRate,fixingDate,settlementDate
+FXF-EURUSD-3M,OUTRIGHT,EURUSD,BUY_BASE,1.1500,,2026-12-11
+NDF-USDKRW-1M,NDF,USDKRW,SELL_BASE,1386.50,2026-10-09,2026-10-13

@@ -1,6 +1,7 @@
 package com.fixedincomerisk.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import com.fixedincomerisk.market.MarketState.FuturesMarket;
@@ -29,8 +30,12 @@ class FuturesBasisSimulatorTest {
 
     /** Advances with independent Basis shocks, one per contract. */
     private static List<CtdSwitch> advance(FuturesBasisSimulator simulator, RandomGenerator random) {
+        return advance(simulator, random, 0);
+    }
+
+    private static List<CtdSwitch> advance(FuturesBasisSimulator simulator, RandomGenerator random, long tick) {
         List<Double> shocks = simulator.state().keySet().stream().map(c -> random.nextGaussian()).toList();
-        return simulator.advance(HOUR, shocks, random);
+        return simulator.advance(tick, HOUR, shocks, random);
     }
 
     @Test
@@ -105,6 +110,88 @@ class FuturesBasisSimulatorTest {
             assertThat(after.basis() - before.basis()).isCloseTo(ctdSwitch.basisJump(), within(1e-12));
             before = after;
         }
+    }
+
+    /** A scheduled switch fires at its Tick whatever the draw says, so an article's moment stays put. */
+    @Test
+    void aScheduledCtdSwitchFiresAtItsTickToItsProxyBond() {
+        FuturesBasisSimulator simulator = new FuturesBasisSimulator(
+                new FuturesBasisParameters(12, -0.2, 0.5, 0, 0.15,
+                        List.of(FuturesBasisParameters.ScheduledCtdSwitch.parse("ZNZ6@480:CTD3"))),
+                contracts());
+        RandomGenerator random = random(5);
+
+        for (long tick = 1; tick < 480; tick++) {
+            assertThat(advance(simulator, random, tick)).isEmpty();
+        }
+        List<CtdSwitch> switches = advance(simulator, random, 480);
+
+        assertThat(switches).singleElement().satisfies(fired -> {
+            assertThat(fired.contract()).isEqualTo("ZNZ6");
+            assertThat(fired.fromIndex()).isZero();
+            // CTD3 is the third Proxy Bond, index 2.
+            assertThat(fired.toIndex()).isEqualTo(2);
+            // Scheduled switches jump the Basis upwards, so the moment does not depend on a coin flip.
+            assertThat(fired.basisJump()).isEqualTo(0.15);
+        });
+        assertThat(simulator.state().get("ZNZ6").proxyIndex()).isEqualTo(2);
+        // The unscheduled contract is untouched.
+        assertThat(simulator.state().get("ZFZ6").proxyIndex()).isZero();
+        assertThat(advance(simulator, random, 481)).isEmpty();
+    }
+
+    /** Scheduling one contract does not stop the others being drawn. */
+    @Test
+    void randomSwitchesContinueForContractsThatAreNotScheduled() {
+        FuturesBasisSimulator simulator = new FuturesBasisSimulator(
+                new FuturesBasisParameters(0, -0.2, 0, 1e12, 0.15,
+                        List.of(FuturesBasisParameters.ScheduledCtdSwitch.parse("ZNZ6@5:CTD2"))),
+                contracts());
+        RandomGenerator random = random(9);
+
+        List<CtdSwitch> atTickOne = advance(simulator, random, 1);
+
+        // ZNZ6 has nothing scheduled at tick 1, so both contracts draw and both switch.
+        assertThat(atTickOne).extracting(CtdSwitch::contract).containsExactly("ZNZ6", "ZFZ6");
+    }
+
+    @Test
+    void aScheduledSwitchToTheCurrentProxyBondIsNotASwitch() {
+        FuturesBasisSimulator simulator = new FuturesBasisSimulator(
+                new FuturesBasisParameters(12, -0.2, 0, 0, 0.15,
+                        List.of(FuturesBasisParameters.ScheduledCtdSwitch.parse("ZNZ6@3:CTD1"))),
+                contracts());
+
+        assertThat(advance(simulator, random(1), 3)).isEmpty();
+    }
+
+    @Test
+    void aScheduledSwitchSpecIsParsedAndValidated() {
+        FuturesBasisParameters.ScheduledCtdSwitch parsed =
+                FuturesBasisParameters.ScheduledCtdSwitch.parse(" ZNZ6@480:CTD3 ");
+
+        assertThat(parsed.contract()).isEqualTo("ZNZ6");
+        assertThat(parsed.tick()).isEqualTo(480);
+        assertThat(parsed.proxyIndex()).isEqualTo(2);
+        assertThatThrownBy(() -> FuturesBasisParameters.ScheduledCtdSwitch.parse("ZNZ6:480:CTD3"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("ZNZ6@480:CTD3");
+        assertThatThrownBy(() -> FuturesBasisParameters.ScheduledCtdSwitch.parse("ZNZ6@480:3"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("ZNZ6@480:CTD3");
+        assertThatThrownBy(() -> FuturesBasisParameters.ScheduledCtdSwitch.parse("ZNZ6@480:CTD0"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("starts at 1");
+    }
+
+    /** A schedule naming a Proxy Bond the contract does not have fails loudly rather than silently. */
+    @Test
+    void aScheduledSwitchBeyondTheContractsProxyBondsFails() {
+        FuturesBasisSimulator simulator = new FuturesBasisSimulator(
+                new FuturesBasisParameters(12, -0.2, 0, 0, 0.15,
+                        List.of(FuturesBasisParameters.ScheduledCtdSwitch.parse("ZNZ6@3:CTD9"))),
+                contracts());
+
+        assertThatThrownBy(() -> advance(simulator, random(1), 3))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("names Proxy Bond 9, but it has only 3");
     }
 
     @Test

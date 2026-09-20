@@ -133,13 +133,14 @@ public record InterestRateSwap(String id, Direction direction, double fixedRate,
         for (Period period : fixedPeriods()) {
             if (period.end().isAfter(from) && !period.end().isAfter(to)) {
                 paid.add(new CashFlow(period.end(), CashFlow.Kind.FIXED_LEG,
-                        -direction.sign * fixedRate * fixedAccrual(period)));
+                        -direction.sign * fixedRate * fixedAccrual(period), currency()));
             }
         }
         for (Period period : floatingPeriods()) {
             if (period.end().isAfter(from) && !period.end().isAfter(to)) {
                 paid.add(new CashFlow(period.end(), CashFlow.Kind.FLOATING_LEG,
-                        direction.sign * market.fixings().rate(period.start()) * floatingAccrual(period)));
+                        direction.sign * market.fixings().rate(period.start()) * floatingAccrual(period),
+                        currency()));
             }
         }
         return paid;
@@ -191,8 +192,8 @@ public record InterestRateSwap(String id, Direction direction, double fixedRate,
         return periods;
     }
 
-    private static double discountFactor(MarketState market, LocalDate date) {
-        return market.curve().discountFactor(YearFractions.act365(market.valuationDate(), date));
+    private double discountFactor(MarketState market, LocalDate date) {
+        return market.curve(currency()).discountFactor(YearFractions.act365(market.valuationDate(), date));
     }
 
     public record Period(LocalDate start, LocalDate end) {

@@ -1,6 +1,6 @@
 package com.fixedincomerisk.curve;
 
-/** Where the session's starting Treasury curve came from. */
+/** Where one currency's starting curve came from. Reported per currency. */
 public enum CurveSourceKind {
     LIVE,
     CACHED,

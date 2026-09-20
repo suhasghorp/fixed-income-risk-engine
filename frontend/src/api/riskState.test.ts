@@ -19,13 +19,17 @@ const position = (positionId: string, dirtyPrice: number): PositionResult => ({
   instrumentType: 'TREASURY_BOND',
   description: `UST ${positionId}`,
   quantity: 1_000_000,
+  notionalCurrency: 'USD',
   cleanPrice: dirtyPrice - 0.1,
   accruedInterest: 0.1,
   dirtyPrice,
   value: dirtyPrice * 10_000,
   dv01: dirtyPrice,
   bucketedDv01: [{ pillar: '2Y', years: 2, dv01: dirtyPrice }],
+  ratesByCurrency: [{ currency: 'USD', dv01: dirtyPrice, bucketedDv01: [{ pillar: '2Y', years: 2, dv01: dirtyPrice }] }],
   cs01: 0,
+  fxDelta: [],
+  pointsDelta: [],
   ratingBucket: null,
   lastPricedTick: 0,
 });
@@ -63,7 +67,10 @@ const bookRisk = (dv01: number): BookRisk => ({
   value: dv01 * 10_000,
   dv01,
   bucketedDv01: [{ pillar: '2Y', years: 2, dv01 }],
+  ratesByCurrency: [{ currency: 'USD', dv01, bucketedDv01: [{ pillar: '2Y', years: 2, dv01 }] }],
   cs01: 0,
+  fxDeltaByCurrency: [{ currency: 'EUR', amount: 0 }],
+  pointsDeltaByPair: [{ pair: 'USDKRW', amount: 0 }],
   byInstrumentType: [{ instrumentType: 'TREASURY_BOND', positionCount: 2, value: dv01 * 10_000, dv01, cs01: 0 }],
   byRatingBucket: [{ ratingBucket: 'A Industrials', positionCount: 0, value: 0, dv01: 0, cs01: 0 }],
 });
@@ -71,6 +78,7 @@ const bookRisk = (dv01: number): BookRisk => ({
 const coupon = (tick: number, positionId = 'P01'): LifecycleEvent => ({
   tick,
   date: '2026-09-13',
+  currency: 'USD',
   positionId,
   instrumentId: `CUSIP-${positionId}`,
   description: `UST ${positionId}`,
@@ -97,12 +105,17 @@ const snapshot = (sequence: number): RiskSnapshot => ({
   session: {
     curveSource: 'BUNDLED',
     curveDate: '2026-09-11',
+    curves: [
+      { currency: 'USD', source: 'BUNDLED', date: '2026-09-11', quotes: 'PAR_YIELD' },
+      { currency: 'EUR', source: 'BUNDLED', date: '2026-09-17', quotes: 'ZERO_RATE' },
+    ],
     valuationDate: '2026-09-11',
     seed: 42,
     simulatedSecondsPerTick: 3600,
     ticksPerDay: 24,
     stopAtTick: null,
   },
+  fx: { pairs: [], contracts: [] },
   positions: [position('P01', 99), position('P02', 98)],
   bookRisk: bookRisk(197),
   curve: {
@@ -136,6 +149,7 @@ const update = (sequence: number, overrides: Partial<RiskUpdate> = {}): RiskUpda
   tick: sequence,
   ticksUntilDayRollover: 24 - (sequence % 24),
   valuationDate: null,
+  fx: null,
   positions: [position('P01', 99 + sequence / 100)],
   bookRisk: bookRisk(197 + sequence / 100),
   curve: {

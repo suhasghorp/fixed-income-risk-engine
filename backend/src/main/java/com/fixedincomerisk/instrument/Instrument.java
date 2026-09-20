@@ -50,6 +50,20 @@ public interface Instrument {
         return false;
     }
 
+    /**
+     * The currency this Instrument's notional — the Position quantity — is denominated in. It is the
+     * valuation currency for everything except an FX Forward, where the two differ and the contract says
+     * which: a deliverable outright is struck on the foreign amount, an NDF usually on the USD amount.
+     */
+    default String notionalCurrency() {
+        return currency();
+    }
+
+    /** The currency pair this Instrument is priced from, if any; empty for everything but FX. */
+    default Optional<String> fxPair() {
+        return Optional.empty();
+    }
+
     /** The corporate issuer whose Mark prices this Instrument, if any. */
     default Optional<String> issuer() {
         return Optional.empty();

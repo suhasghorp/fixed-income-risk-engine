@@ -86,7 +86,7 @@ public record CorporateBond(String id, String issuerId, String issuerName, doubl
         for (CashFlow cashFlow : cashFlows()) {
             if (cashFlow.date().isAfter(valuationDate)) {
                 double t = YearFractions.act365(valuationDate, cashFlow.date());
-                value += cashFlow.amount() * market.curve().discountFactor(t) * Math.exp(-spread * t);
+                value += cashFlow.amount() * market.curve(currency()).discountFactor(t) * Math.exp(-spread * t);
             }
         }
         return value;
@@ -108,7 +108,7 @@ public record CorporateBond(String id, String issuerId, String issuerName, doubl
     }
 
     public List<CashFlow> cashFlows() {
-        return schedule().cashFlows(couponRate);
+        return schedule().cashFlows(couponRate, currency());
     }
 
     private SemiAnnualSchedule schedule() {

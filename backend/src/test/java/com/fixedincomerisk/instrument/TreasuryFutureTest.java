@@ -29,7 +29,7 @@ class TreasuryFutureTest {
             List.of(new ProxyBond(CTD1, 0.9003), new ProxyBond(CTD2, 0.9040)));
 
     private static MarketState market(int proxyIndex, double basis) {
-        return new MarketState(VALUATION, SLOPED, Map.of("ZNZ6", new FuturesMarket(proxyIndex, basis)),
+        return new MarketState(VALUATION, Map.of("USD", SLOPED), Map.of("ZNZ6", new FuturesMarket(proxyIndex, basis)),
                 MarketState.CreditMarket.NONE);
     }
 
@@ -54,9 +54,9 @@ class TreasuryFutureTest {
     void dv01BumpsTheCurveWithTheBasisHeldFixed() {
         SensitivityCalculator calculator = new SensitivityCalculator(Pillar.DEFAULTS);
 
-        CurveSensitivities lowBasis = calculator.curveSensitivities(future, market(0, -0.5));
-        CurveSensitivities highBasis = calculator.curveSensitivities(future, market(0, 2.0));
-        CurveSensitivities proxyOnly = calculator.curveSensitivities(CTD1, market(0, 0));
+        CurveSensitivities lowBasis = calculator.curveSensitivities(future, market(0, -0.5), "USD");
+        CurveSensitivities highBasis = calculator.curveSensitivities(future, market(0, 2.0), "USD");
+        CurveSensitivities proxyOnly = calculator.curveSensitivities(CTD1, market(0, 0), "USD");
 
         assertThat(lowBasis.dv01()).isPositive().isCloseTo(highBasis.dv01(), within(1e-12));
         assertThat(lowBasis.dv01()).as("the Proxy Bond's DV01 scaled by 1/CF")

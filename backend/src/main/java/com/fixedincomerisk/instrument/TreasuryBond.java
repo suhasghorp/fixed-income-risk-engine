@@ -75,7 +75,7 @@ public record TreasuryBond(String cusip, String term, double couponRate, LocalDa
         double value = 0;
         for (CashFlow cashFlow : cashFlows()) {
             if (cashFlow.date().isAfter(valuationDate)) {
-                value += cashFlow.amount() * market.curve().discountFactor(
+                value += cashFlow.amount() * market.curve(currency()).discountFactor(
                         YearFractions.act365(valuationDate, cashFlow.date()));
             }
         }
@@ -91,7 +91,7 @@ public record TreasuryBond(String cusip, String term, double couponRate, LocalDa
 
     /** Every coupon, then the redemption of principal at maturity. Dates are unadjusted. */
     public List<CashFlow> cashFlows() {
-        return schedule().cashFlows(couponRate);
+        return schedule().cashFlows(couponRate, currency());
     }
 
     /** Accrued interest per unit of notional: ACT/ACT (ICMA) within the regular period. */

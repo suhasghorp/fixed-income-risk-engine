@@ -16,6 +16,7 @@ import com.fixedincomerisk.market.FactorType;
 import com.fixedincomerisk.market.FixingHistory;
 import com.fixedincomerisk.market.Pillar;
 import com.fixedincomerisk.market.RiskFactorId;
+import com.fixedincomerisk.market.FxPairs;
 import com.fixedincomerisk.model.CorrelationMatrix;
 import com.fixedincomerisk.model.FuturesBasisParameters;
 import com.fixedincomerisk.model.HullWhiteParameters;
@@ -58,7 +59,7 @@ class RiskSessionTest {
             THIRTY_YEAR,912810UW6,2000000
             """;
 
-    private static final RepricingSettings TWO_BP = new RepricingSettings(new MaterialityThresholds(2, 1, 1, 0.02), 0.05);
+    private static final RepricingSettings TWO_BP = new RepricingSettings(new MaterialityThresholds(2, 1, 1, 0.02, 0, 0), 0.05);
 
     private static final CreditParameters CREDIT = new CreditParameters(0.5, 60, 40, 2, 25, 20, 15);
 
@@ -141,12 +142,23 @@ class RiskSessionTest {
             SHORT_10Y,91282CRF0,-3000000
             """;
 
-    /** A fake Curve Source: a flat 4.5% par curve reported as LIVE. */
-    private static final CurveSource FAKE_CURVE_SOURCE = () -> new CurveSnapshot(
-            new ParCurve(CURVE_DATE, List.of(0.5, 1.0, 2.0, 5.0, 10.0, 30.0).stream()
-                    .map(t -> new ParPoint(t + "Y", t, 0.045))
-                    .toList()),
-            CurveSourceKind.LIVE);
+    /** A fake USD Curve Source: a flat 4.5% par curve reported as LIVE. */
+    private static final CurveSource FAKE_CURVE_SOURCE = new CurveSource() {
+
+        @Override
+        public String currency() {
+            return "USD";
+        }
+
+        @Override
+        public CurveSnapshot load() {
+            return CurveSnapshot.of(
+                    new ParCurve(CURVE_DATE, List.of(0.5, 1.0, 2.0, 5.0, 10.0, 30.0).stream()
+                            .map(t -> new ParPoint(t + "Y", t, 0.045))
+                            .toList()),
+                    CurveSourceKind.LIVE);
+        }
+    };
 
     private final RiskSession session = session(42);
 
@@ -176,20 +188,27 @@ class RiskSessionTest {
         return session(seed, book, ticksPerDay, repricing, basis, credit, CreditEventParameters.NONE);
     }
 
+    /** One currency, no FX: the factor set the engine ran on before the euro curve. */
+    private static final List<String> SINGLE_CURRENCY_FACTORS = List.of("shortRate.USD", "systemic", "basis");
+
     private static RiskSession session(long seed, String book, int ticksPerDay, RepricingSettings repricing,
                                        FuturesBasisParameters basis, CreditParameters credit,
                                        CreditEventParameters creditEvents) {
-        return session(seed, book, ticksPerDay, repricing, basis, credit, creditEvents, CorrelationMatrix.identity());
+        return session(seed, book, ticksPerDay, repricing, basis, credit, creditEvents, CorrelationMatrix.independent(SINGLE_CURRENCY_FACTORS));
     }
 
     private static RiskSession session(long seed, String book, int ticksPerDay, RepricingSettings repricing,
                                        FuturesBasisParameters basis, CreditParameters credit,
                                        CreditEventParameters creditEvents, CorrelationMatrix correlations) {
         return RiskSession.create(new SessionConfig(
-                FAKE_CURVE_SOURCE,
+                List.of(FAKE_CURVE_SOURCE),
+                "USD",
                 ReferenceData.parse(new ReferenceData.Csv(TREASURIES, FUTURES, RATING_BUCKETS, ISSUERS, CORPORATES, SWAPS, book)),
-                new HullWhiteParameters(0.05, 0.01),
+                Map.of("USD", new HullWhiteParameters(0.05, 0.01)),
                 basis,
+                FxPairs.NONE,
+                Map.of(),
+                Map.of(),
                 credit,
                 creditEvents,
                 correlations,
@@ -505,7 +524,7 @@ class RiskSessionTest {
 
     @Test
     void veryLargeThresholdsRepriceNothingExceptAtDayRollover() {
-        RiskSession session = session(42, BOOK, 4, new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 1e6), 0.05));
+        RiskSession session = session(42, BOOK, 4, new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 1e6, 0, 0), 0.05));
         RiskSnapshot start = session.snapshot();
 
         for (int tick = 1; tick <= 3; tick++) {
@@ -533,7 +552,7 @@ class RiskSessionTest {
     void subThresholdDriftAccumulatesUntilItTriggersAReprice() {
         // A 5bp threshold is several times the per-tick move, so any reprice is triggered by drift that
         // built up over many ticks. With no Day Rollover in the run, drift is the only trigger.
-        RiskSession session = session(42, BOOK, 10_000, new RepricingSettings(new MaterialityThresholds(5, 1e6, 1e6, 1e6), 0.05));
+        RiskSession session = session(42, BOOK, 10_000, new RepricingSettings(new MaterialityThresholds(5, 1e6, 1e6, 1e6, 0, 0), 0.05));
         List<RiskSnapshot.CurvePoint> previous = session.snapshot().curve().pillars();
         double largestTickMoveBp = 0;
         int reprices = 0;
@@ -640,7 +659,7 @@ class RiskSessionTest {
     void aCtdSwitchChangesTheProxyBondJumpsTheBasisAndRepricesTheFutureOnThatTick() {
         // A switch on every tick and no diffusion; thresholds so large that nothing else reprices.
         RiskSession session = session(42, FUTURES_BOOK, 10_000,
-                new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 1e6), 0.05),
+                new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 1e6, 0, 0), 0.05),
                 new FuturesBasisParameters(0, -0.2, 0, 1e12, 0.15));
         RiskSnapshot.FuturesView before = session.snapshot().futures().getFirst();
         assertThat(before.proxyBondId()).isEqualTo("ZNZ6-CTD1");
@@ -688,7 +707,7 @@ class RiskSessionTest {
     void aBasisMovePastItsThresholdRepricesTheFutureAlone() {
         // Curve thresholds too large to trigger, and no Day Rollover: only the Basis can dirty anything.
         RiskSession session = session(42, FUTURES_BOOK, 10_000,
-                new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 0.02), 0.05),
+                new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 0.02, 0, 0), 0.05),
                 new FuturesBasisParameters(12, -0.2, 0.5, 0, 0.15));
         int futureReprices = 0;
 
@@ -867,7 +886,7 @@ class RiskSessionTest {
 
     /** Thresholds so large that only discrete moves (Day Rollover, Rating Migration) reprice anything. */
     private static final RepricingSettings NOTHING_BUT_DISCRETE_MOVES =
-            new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 1e6), 0.05);
+            new RepricingSettings(new MaterialityThresholds(1e6, 1e6, 1e6, 1e6, 0, 0), 0.05);
 
     @Test
     void aRatingMigrationRewiresDependenciesAndMovesCs01BetweenBucketsOnTheSameTick() {
@@ -1020,7 +1039,7 @@ class RiskSessionTest {
         assertThat(payer.currentPeriodStart()).isEqualTo("2026-10-15");
         double recorded = payer.currentFixing();
         assertThat(recorded).as("recorded from the simulated curve at the reset")
-                .isEqualTo(FixingHistory.indexRate(session.marketState(), LocalDate.of(2026, 10, 15)));
+                .isEqualTo(FixingHistory.indexRate(session.marketState(), "USD", LocalDate.of(2026, 10, 15)));
         assertThat(reset.positions()).extracting(PositionResult::positionId).contains("PAYER");
         assertThat(reset.lifecycleEvents()).filteredOn(e -> e.positionId().equals("PAYER")).singleElement()
                 .satisfies(e -> {
@@ -1072,7 +1091,8 @@ class RiskSessionTest {
     }
 
     /** The default flight-to-quality matrix: short rate vs Systemic −0.3, short rate vs Basis 0.1. */
-    private static final CorrelationMatrix FLIGHT_TO_QUALITY = CorrelationMatrix.of(-0.3, 0.1, 0);
+    private static final CorrelationMatrix FLIGHT_TO_QUALITY = CorrelationMatrix.parse(
+            "shortRate.USD, systemic, basis", "1,-0.3,0.1; -0.3,1,0; 0.1,0,1");
 
     private static final String EVERYTHING_BOOK = """
             positionId,instrumentId,quantity
@@ -1091,8 +1111,8 @@ class RiskSessionTest {
         double[] basis = new double[n];
         for (int i = 0; i < n; i++) {
             session.step();
-            rate[i] = session.lastShocks().shortRate();
-            systemic[i] = session.lastShocks().systemic();
+            rate[i] = session.lastShocks().of("shortRate.USD");
+            systemic[i] = session.lastShocks().of("systemic");
             basis[i] = session.lastShocks().basis().getFirst();
         }
 
@@ -1104,15 +1124,15 @@ class RiskSessionTest {
     @Test
     void zeroCorrelationGivesNearZeroSampleCorrelations() {
         RiskSession session = session(42, EVERYTHING_BOOK, 24, TWO_BP, BASIS, CREDIT, CreditEventParameters.NONE,
-                CorrelationMatrix.identity());
+                CorrelationMatrix.independent(SINGLE_CURRENCY_FACTORS));
         int n = 20_000;
         double[] rate = new double[n];
         double[] systemic = new double[n];
         double[] basis = new double[n];
         for (int i = 0; i < n; i++) {
             session.step();
-            rate[i] = session.lastShocks().shortRate();
-            systemic[i] = session.lastShocks().systemic();
+            rate[i] = session.lastShocks().of("shortRate.USD");
+            systemic[i] = session.lastShocks().of("systemic");
             basis[i] = session.lastShocks().basis().getFirst();
         }
 

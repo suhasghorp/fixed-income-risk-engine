@@ -1,17 +1,22 @@
-import type { RiskSnapshot, SessionInfo } from '../api/riskSnapshot';
+import type { CurveSourceInfo, CurveSourceKind, RiskSnapshot } from '../api/riskSnapshot';
 import type { StreamStatus } from '../api/useRiskStream';
 import { formatSimulatedDuration } from '../format';
 
-const SOURCE_LABEL: Record<SessionInfo['curveSource'], string> = {
+const SOURCE_LABEL: Record<CurveSourceKind, string> = {
   LIVE: 'Live',
   CACHED: 'Cached',
   BUNDLED: 'Bundled',
 };
 
-const SOURCE_EXPLANATION: Record<SessionInfo['curveSource'], string> = {
-  LIVE: 'Fetched from Treasury at startup.',
+const SOURCE_EXPLANATION: Record<CurveSourceKind, string> = {
+  LIVE: 'Fetched from the publisher at startup.',
   CACHED: 'Live fetch failed; using the last curve fetched successfully.',
   BUNDLED: 'Live fetch failed and no cached curve was available; using the snapshot bundled with the app.',
+};
+
+const QUOTES_EXPLANATION: Record<CurveSourceInfo['quotes'], string> = {
+  PAR_YIELD: 'Published as par yields, bootstrapped to a discount curve.',
+  ZERO_RATE: 'Published as spot rates, already bootstrapped by the publisher.',
 };
 
 export function SessionPanel({ snapshot, status }: { snapshot: RiskSnapshot | null; status: StreamStatus }) {
@@ -48,19 +53,22 @@ export function SessionPanel({ snapshot, status }: { snapshot: RiskSnapshot | nu
       </div>
       <div>
         <dt>Curve Source</dt>
-        <dd>
-          {session ? (
-            <span className={`badge badge-${session.curveSource.toLowerCase()}`} title={SOURCE_EXPLANATION[session.curveSource]}>
-              {SOURCE_LABEL[session.curveSource]}
-            </span>
-          ) : (
-            '—'
-          )}
+        <dd className="curve-sources">
+          {session?.curves?.length
+            ? session.curves.map((curve) => (
+                <span key={curve.currency} className="curve-source">
+                  <span className="ccy">{curve.currency}</span>
+                  <span
+                    className={`badge badge-${curve.source.toLowerCase()}`}
+                    title={`${SOURCE_EXPLANATION[curve.source]} ${QUOTES_EXPLANATION[curve.quotes]}`}
+                  >
+                    {SOURCE_LABEL[curve.source]}
+                  </span>
+                  <span className="curve-date">{curve.date}</span>
+                </span>
+              ))
+            : '—'}
         </dd>
-      </div>
-      <div>
-        <dt>Curve date</dt>
-        <dd>{session?.curveDate ?? '—'}</dd>
       </div>
       <div>
         <dt>Valuation Date</dt>

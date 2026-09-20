@@ -47,6 +47,19 @@ public record RiskFactorId(String currency, FactorType type, String name) {
         return new RiskFactorId(currency, FactorType.PROXY_BOND, futuresContract);
     }
 
+    /**
+     * A currency pair's FX Spot. The currency is the pair's non-Reporting side, because that is the
+     * currency FX Delta is reported against; the name is the pair, e.g. "EURUSD".
+     */
+    public static RiskFactorId fxSpot(String currency, String pair) {
+        return new RiskFactorId(currency, FactorType.FX_SPOT, pair);
+    }
+
+    /** An NDF pair's Forward Points. Its currency has no curve, which is why the points are quoted. */
+    public static RiskFactorId ndfPoints(String currency, String pair) {
+        return new RiskFactorId(currency, FactorType.NDF_POINTS, pair);
+    }
+
     public static RiskFactorId valuationDate(String currency) {
         return new RiskFactorId(currency, FactorType.VALUATION_DATE, "");
     }

@@ -8,15 +8,21 @@ import com.fixedincomerisk.credit.CreditObservationSimulator;
 import com.fixedincomerisk.credit.Issuer;
 import com.fixedincomerisk.credit.RatingBucketSpec;
 import com.fixedincomerisk.curve.CurveSnapshot;
+import com.fixedincomerisk.market.FxFixingHistory;
+import com.fixedincomerisk.market.FxPair;
 import com.fixedincomerisk.instrument.CashFlow;
 import com.fixedincomerisk.instrument.Instrument;
+import com.fixedincomerisk.instrument.FxNdf;
 import com.fixedincomerisk.instrument.InterestRateSwap;
 import com.fixedincomerisk.instrument.ProxyBond;
 import com.fixedincomerisk.instrument.TreasuryFuture;
 import com.fixedincomerisk.market.FixingHistory;
 import com.fixedincomerisk.market.MarketState;
+import com.fixedincomerisk.market.YieldCurve;
 import com.fixedincomerisk.model.CorrelatedShockGenerator;
 import com.fixedincomerisk.model.FuturesBasisSimulator;
+import com.fixedincomerisk.model.FxSpotSimulator;
+import com.fixedincomerisk.model.NdfPointsSimulator;
 import com.fixedincomerisk.model.FuturesBasisSimulator.CtdSwitch;
 import com.fixedincomerisk.model.HullWhiteModel;
 import com.fixedincomerisk.model.HullWhiteSimulator;
@@ -33,6 +39,7 @@ import com.fixedincomerisk.session.RiskSnapshot.SwapView;
 import com.fixedincomerisk.simulation.SimulationClock;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -58,10 +65,16 @@ final class MarketSimulator {
     private static final double CHART_MAX_YEARS = 30;
 
     private final SessionConfig config;
-    private final CurveSnapshot curveSnapshot;
+    /** The curve each currency was anchored to, by currency, in Curve Source order. */
+    private final Map<String, CurveSnapshot> curveSnapshots;
     private final RandomGenerator random;
     private final SimulationClock clock;
-    private final HullWhiteSimulator shortRate;
+    /** One simulated short rate per currency, in Curve Source order. */
+    private final Map<String, HullWhiteSimulator> shortRates = new LinkedHashMap<>();
+    /** One simulated FX Spot per pair, in reference data order. */
+    private final Map<String, FxSpotSimulator> fxSpots = new LinkedHashMap<>();
+    /** Forward Points per non-deliverable pair; a deliverable pair derives its forward from two curves. */
+    private final Map<String, NdfPointsSimulator> ndfPoints = new LinkedHashMap<>();
     private final CorrelatedShockGenerator shocks;
     private final FuturesBasisSimulator futuresBasis;
     /** The Book's futures contracts, by contract id. */
@@ -74,15 +87,26 @@ final class MarketSimulator {
     /** The Book's swaps, and the Fixings of their floating index. */
     private final List<InterestRateSwap> swaps;
     private final FixingHistory fixingHistory = new FixingHistory();
+    /** The Book's NDFs, and the FX Fixings that strike their settlements. */
+    private final List<FxNdf> ndfs;
+    private final FxFixingHistory fxFixingHistory = new FxFixingHistory();
 
     private MarketState market;
 
-    MarketSimulator(SessionConfig config, CurveSnapshot curveSnapshot, HullWhiteModel model) {
+    MarketSimulator(SessionConfig config, Map<String, CurveSnapshot> curveSnapshots,
+                    Map<String, HullWhiteModel> models) {
         this.config = config;
-        this.curveSnapshot = curveSnapshot;
+        this.curveSnapshots = Collections.unmodifiableMap(new LinkedHashMap<>(curveSnapshots));
         this.random = RandomGeneratorFactory.of(RANDOM_ALGORITHM).create(config.simulation().seed());
-        this.clock = new SimulationClock(config.simulation(), curveSnapshot.curve().curveDate());
-        this.shortRate = new HullWhiteSimulator(model);
+        this.clock = new SimulationClock(config.simulation(),
+                curveSnapshots.get(config.reportingCurrency()).curveDate());
+        models.forEach((currency, model) -> shortRates.put(currency, new HullWhiteSimulator(model)));
+        for (FxPair pair : config.fxPairs().pairs()) {
+            fxSpots.put(pair.pair(), new FxSpotSimulator(pair.startingSpot(), config.fxSpot(pair.pair())));
+        }
+        for (FxPair pair : config.fxPairs().nonDeliverable()) {
+            ndfPoints.put(pair.pair(), new NdfPointsSimulator(config.ndfPoints(pair.pair())));
+        }
         this.shocks = new CorrelatedShockGenerator(config.correlations());
         Map<String, Integer> deliverableCounts = new LinkedHashMap<>();
         for (TreasuryFuture future : config.referenceData().futuresInBook()) {
@@ -100,6 +124,12 @@ final class MarketSimulator {
                 .distinct()
                 .filter(InterestRateSwap.class::isInstance)
                 .map(InterestRateSwap.class::cast)
+                .toList();
+        this.ndfs = config.referenceData().book().positions().stream()
+                .map(Position::instrument)
+                .distinct()
+                .filter(FxNdf.class::isInstance)
+                .map(FxNdf.class::cast)
                 .toList();
         seedFixings();
         this.market = currentMarket();
@@ -121,15 +151,24 @@ final class MarketSimulator {
         }
         SimulationClock.Step step = clock.advance();
         CorrelatedShockGenerator.Shocks tickShocks = shocks.next(random, futures.size());
-        shortRate.advance(step.dt(), tickShocks.shortRate());
-        List<CtdSwitchEvent> switches = ctdSwitchEvents(futuresBasis.advance(step.dt(), tickShocks.basis(), random));
-        creditFactors.advance(clock.tick(), step.dt(), tickShocks.systemic(), random);
+        // Each currency's short rate takes its own named shock, so two curves are correlated rather than
+        // identical; each pair's spot and points likewise.
+        shortRates.forEach((currency, rate) ->
+                rate.advance(step.dt(), tickShocks.of(SessionConfig.shortRateFactor(currency))));
+        fxSpots.forEach((pair, spot) ->
+                spot.advance(step.dt(), tickShocks.of(config.fxPairs().get(pair).spotShockFactor())));
+        ndfPoints.forEach((pair, points) ->
+                points.advance(step.dt(), tickShocks.of(config.fxPairs().get(pair).pointsShockFactor())));
+        List<CtdSwitchEvent> switches =
+                ctdSwitchEvents(futuresBasis.advance(clock.tick(), step.dt(), tickShocks.basis(), random));
+        creditFactors.advance(clock.tick(), step.dt(), tickShocks.of("systemic"), random);
         marker.update(clock.tick(), creditFactors.observables(), creditObservations.advance(step.dt(), random));
         List<LifecycleEvent> events = step.isDayRollover()
                 ? lifecycleEvents(step.previousValuationDate(), step.valuationDate())
                 : List.of();
         if (step.isDayRollover()) {
             recordFixings();
+            recordFxFixings();
         }
         market = currentMarket();
         return tick(step.isDayRollover(), events, switches, tickShocks);
@@ -140,8 +179,8 @@ final class MarketSimulator {
         return config.simulation().canAdvancePast(clock.tick());
     }
 
-    CurveSnapshot curveSnapshot() {
-        return curveSnapshot;
+    CurveSnapshot curveSnapshot(String currency) {
+        return curveSnapshots.get(currency);
     }
 
     private MarketTick tick(boolean dayRollover, List<LifecycleEvent> events, List<CtdSwitchEvent> switches,
@@ -151,8 +190,24 @@ final class MarketSimulator {
     }
 
     private MarketState currentMarket() {
-        return new MarketState(clock.valuationDate(), shortRate.curve(), futuresBasis.state(), creditMarket(),
-                fixingHistory.fixings());
+        return new MarketState(clock.valuationDate(), curves(), futuresBasis.state(), creditMarket(),
+                fixingHistory.fixings(), fxMarket());
+    }
+
+    /** Every pair's FX Spot, and Forward Points for the non-deliverable ones. */
+    private MarketState.FxMarket fxMarket() {
+        Map<String, Double> spot = new LinkedHashMap<>();
+        fxSpots.forEach((pair, simulator) -> spot.put(pair, simulator.spot()));
+        Map<String, Double> points = new LinkedHashMap<>();
+        ndfPoints.forEach((pair, simulator) -> points.put(pair, simulator.points()));
+        return new MarketState.FxMarket(spot, points, fxFixingHistory.fixings());
+    }
+
+    /** Every currency's curve as its short-rate simulator currently implies it. */
+    private Map<String, YieldCurve> curves() {
+        Map<String, YieldCurve> curves = new LinkedHashMap<>();
+        shortRates.forEach((currency, rate) -> curves.put(currency, rate.curve()));
+        return curves;
     }
 
     /** Cash flows each Position receives (or, when short, pays) for dates in (from, to]. */
@@ -169,7 +224,8 @@ final class MarketSimulator {
                         instrument.description(),
                         cashFlow.kind().name(),
                         cashFlow.amount() * 100,
-                        cashFlow.amount() * position.quantity()));
+                        cashFlow.amount() * position.quantity(),
+                        cashFlow.currency()));
             }
         }
         return events;
@@ -194,10 +250,10 @@ final class MarketSimulator {
      * today) from the t=0 curve.
      */
     private void seedFixings() {
-        MarketState opening = new MarketState(clock.valuationDate(), shortRate.curve());
+        MarketState opening = new MarketState(clock.valuationDate(), curves());
         for (InterestRateSwap swap : swaps) {
-            swap.currentFloatingPeriod(opening.valuationDate()).ifPresent(period ->
-                    fixingHistory.record(period.start(), FixingHistory.indexRate(opening, period.start())));
+            swap.currentFloatingPeriod(opening.valuationDate()).ifPresent(period -> fixingHistory.record(
+                    period.start(), FixingHistory.indexRate(opening, swap.currency(), period.start())));
         }
     }
 
@@ -206,10 +262,25 @@ final class MarketSimulator {
      * now. A date that already has a Fixing keeps it.
      */
     private void recordFixings() {
-        MarketState today = new MarketState(clock.valuationDate(), shortRate.curve());
+        MarketState today = new MarketState(clock.valuationDate(), curves());
         for (InterestRateSwap swap : swaps) {
             if (swap.resetDates().contains(today.valuationDate())) {
-                fixingHistory.record(today.valuationDate(), FixingHistory.indexRate(today, today.valuationDate()));
+                fixingHistory.record(today.valuationDate(),
+                        FixingHistory.indexRate(today, swap.currency(), today.valuationDate()));
+            }
+        }
+    }
+
+    /**
+     * Records each NDF's FX Fixing on the Day Rollover that lands on its fixing date, from that day's FX
+     * Spot. The first rate recorded for a (pair, date) stands: a settlement that has been struck is not
+     * restruck by a later move in spot.
+     */
+    private void recordFxFixings() {
+        for (FxNdf ndf : ndfs) {
+            if (ndf.fixingDate().equals(clock.valuationDate())) {
+                fxFixingHistory.record(ndf.pair().pair(), ndf.fixingDate(),
+                        fxSpots.get(ndf.pair().pair()).spot());
             }
         }
     }
@@ -224,17 +295,22 @@ final class MarketSimulator {
         return new MarketState.CreditMarket(observables.systemic(), sectors, ratings, marker.marks());
     }
 
+    /** The chart shows the Reporting Currency's curve; the others are reported through risk, not the chart. */
     private CurveView curveView() {
+        YieldCurve curve = market.curve(config.reportingCurrency());
         List<CurvePoint> pillars = config.pillars().stream()
-                .map(p -> new CurvePoint(p.label(), p.years(), market.curve().zeroRate(p.years())))
+                .map(p -> new CurvePoint(p.label(), p.years(), curve.zeroRate(p.years())))
                 .toList();
         List<CurvePoint> points = new ArrayList<>();
         for (int i = 1; i * CHART_STEP_YEARS <= CHART_MAX_YEARS + 1e-9; i++) {
             double years = i * CHART_STEP_YEARS;
-            points.add(new CurvePoint(null, years, market.curve().zeroRate(years)));
+            points.add(new CurvePoint(null, years, curve.zeroRate(years)));
         }
-        List<ParInput> parInputs = curveSnapshot.curve().points().stream()
-                .map(p -> new ParInput(p.tenor(), p.years(), p.parYield()))
+        // The Reporting Currency's published quotes: par yields for the Treasury curve. A currency whose
+        // publisher quotes spot rates carries CurveQuoteKind.ZERO_RATE, which the chart will need when
+        // it shows more than one curve.
+        List<ParInput> parInputs = curveSnapshot(config.reportingCurrency()).quotes().stream()
+                .map(q -> new ParInput(q.tenor(), q.years(), q.rate()))
                 .toList();
         return new CurveView(pillars, List.copyOf(points), parInputs);
     }

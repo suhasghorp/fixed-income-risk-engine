@@ -15,7 +15,7 @@ class TreasuryBondTest {
 
     private static final LocalDate VALUATION = LocalDate.of(2026, 9, 11);
     private static final double FLAT_RATE = 0.04;
-    private static final MarketState FLAT_MARKET = new MarketState(VALUATION, t -> Math.exp(-FLAT_RATE * t));
+    private static final MarketState FLAT_MARKET = MarketState.of(VALUATION, "USD", t -> Math.exp(-FLAT_RATE * t));
 
     /** 2Y note 91282CRH6: 4.125%, dated 2026-08-31, matures 2028-08-31 (end-of-month roll). */
     private final TreasuryBond twoYear = new TreasuryBond(
@@ -69,7 +69,7 @@ class TreasuryBondTest {
     @Test
     void cashFlowsPaidAreThoseAfterTheStartAndOnOrBeforeTheEnd() {
         assertThat(twoYear.cashFlowsPaid(FLAT_MARKET, LocalDate.of(2027, 2, 27), LocalDate.of(2027, 2, 28)))
-                .containsExactly(new CashFlow(LocalDate.of(2027, 2, 28), CashFlow.Kind.COUPON, 0.04125 / 2));
+                .containsExactly(new CashFlow(LocalDate.of(2027, 2, 28), CashFlow.Kind.COUPON, 0.04125 / 2, "USD"));
         assertThat(twoYear.cashFlowsPaid(FLAT_MARKET, LocalDate.of(2027, 2, 28), LocalDate.of(2027, 3, 1))).isEmpty();
         assertThat(twoYear.cashFlowsPaid(FLAT_MARKET, LocalDate.of(2028, 8, 30), LocalDate.of(2028, 8, 31)))
                 .extracting(CashFlow::kind)
@@ -78,8 +78,8 @@ class TreasuryBondTest {
 
     @Test
     void dirtyValueExcludesCashFlowsOnOrBeforeTheValuationDate() {
-        MarketState couponDay = new MarketState(LocalDate.of(2027, 2, 28), FLAT_MARKET.curve());
-        MarketState dayBefore = new MarketState(LocalDate.of(2027, 2, 27), FLAT_MARKET.curve());
+        MarketState couponDay = MarketState.of(LocalDate.of(2027, 2, 28), "USD", FLAT_MARKET.curve("USD"));
+        MarketState dayBefore = MarketState.of(LocalDate.of(2027, 2, 27), "USD", FLAT_MARKET.curve("USD"));
 
         // The day before, the coupon is one day away and still in the value; on the day it has been paid.
         // On a flat curve every remaining flow is one day's discounting further away the day before.
@@ -87,7 +87,7 @@ class TreasuryBondTest {
         assertThat(twoYear.dirtyValue(dayBefore))
                 .isCloseTo(oneDay * (0.04125 / 2 + twoYear.dirtyValue(couponDay)), within(1e-14));
         assertThat(twoYear.accruedInterest(couponDay.valuationDate())).isZero();
-        assertThat(twoYear.dirtyValue(new MarketState(LocalDate.of(2028, 8, 31), FLAT_MARKET.curve()))).isZero();
+        assertThat(twoYear.dirtyValue(MarketState.of(LocalDate.of(2028, 8, 31), "USD", FLAT_MARKET.curve("USD")))).isZero();
     }
 
     @Test
@@ -98,7 +98,7 @@ class TreasuryBondTest {
                 RiskFactorId.pillarZeroRate("USD", Pillar.parse("1Y")),
                 RiskFactorId.pillarZeroRate("USD", Pillar.parse("2Y")));
         // After its last coupon but one, only the Pillars around the final cash flow remain.
-        assertThat(twoYear.riskFactors(new MarketState(LocalDate.of(2028, 3, 1), FLAT_MARKET.curve()), Pillar.DEFAULTS)).containsExactlyInAnyOrder(
+        assertThat(twoYear.riskFactors(MarketState.of(LocalDate.of(2028, 3, 1), "USD", FLAT_MARKET.curve("USD")), Pillar.DEFAULTS)).containsExactlyInAnyOrder(
                 RiskFactorId.valuationDate("USD"),
                 RiskFactorId.pillarZeroRate("USD", Pillar.parse("3M")),
                 RiskFactorId.pillarZeroRate("USD", Pillar.parse("1Y")));

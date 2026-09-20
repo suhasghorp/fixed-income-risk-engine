@@ -35,12 +35,12 @@ public record SemiAnnualSchedule(LocalDate datedDate, LocalDate maturityDate) {
     }
 
     /** Every coupon at {@code couponRate / 2} per unit, then the redemption of principal at maturity. */
-    public List<CashFlow> cashFlows(double couponRate) {
+    public List<CashFlow> cashFlows(double couponRate, String currency) {
         List<CashFlow> cashFlows = new ArrayList<>();
         for (LocalDate couponDate : couponDates()) {
-            cashFlows.add(new CashFlow(couponDate, CashFlow.Kind.COUPON, couponRate / 2));
+            cashFlows.add(new CashFlow(couponDate, CashFlow.Kind.COUPON, couponRate / 2, currency));
         }
-        cashFlows.add(new CashFlow(maturityDate, CashFlow.Kind.REDEMPTION, 1));
+        cashFlows.add(new CashFlow(maturityDate, CashFlow.Kind.REDEMPTION, 1, currency));
         return cashFlows;
     }
 

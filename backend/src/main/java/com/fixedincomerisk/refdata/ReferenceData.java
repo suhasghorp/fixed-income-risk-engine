@@ -6,11 +6,15 @@ import com.fixedincomerisk.credit.Issuer;
 import com.fixedincomerisk.credit.RatingBucket;
 import com.fixedincomerisk.credit.RatingBucketSpec;
 import com.fixedincomerisk.instrument.CorporateBond;
+import com.fixedincomerisk.instrument.FxDirection;
+import com.fixedincomerisk.instrument.FxForward;
+import com.fixedincomerisk.instrument.FxNdf;
 import com.fixedincomerisk.instrument.Instrument;
 import com.fixedincomerisk.instrument.InterestRateSwap;
 import com.fixedincomerisk.instrument.ProxyBond;
 import com.fixedincomerisk.instrument.TreasuryBond;
 import com.fixedincomerisk.instrument.TreasuryFuture;
+import com.fixedincomerisk.market.FxPairs;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -60,17 +64,18 @@ public record ReferenceData(Map<String, Instrument> instruments, Book book, List
                 resource("/refdata/issuers.csv"),
                 resource("/refdata/corporates.csv"),
                 resource("/refdata/swaps.csv"),
+                resource("/refdata/fx-forwards.csv"),
                 resource("/refdata/book.csv")));
     }
 
     /** Reference data with Treasuries only. */
     public static ReferenceData parse(Reader treasuriesCsv, Reader bookCsv) {
-        return parse(new Csv(read(treasuriesCsv), "", "", "", "", "", read(bookCsv)));
+        return parse(new Csv(read(treasuriesCsv), "", "", "", "", "", "", read(bookCsv)));
     }
 
     /** Reference data with Treasuries and futures, and no credit. */
     public static ReferenceData parse(Reader treasuriesCsv, Reader futuresCsv, Reader bookCsv) {
-        return parse(new Csv(read(treasuriesCsv), read(futuresCsv), "", "", "", "", read(bookCsv)));
+        return parse(new Csv(read(treasuriesCsv), read(futuresCsv), "", "", "", "", "", read(bookCsv)));
     }
 
     public static ReferenceData parse(Csv csv) {
@@ -119,6 +124,22 @@ public record ReferenceData(Map<String, Instrument> instruments, Book book, List
                     LocalDate.parse(row[3]), LocalDate.parse(row[4])));
         }
 
+        FxPairs fxPairs = FxPairs.fromClasspath();
+        for (String[] row : rows(csv.fxForwards())) {
+            String kind = row[1].trim();
+            FxDirection direction = FxDirection.valueOf(row[3].trim());
+            double contractRate = Double.parseDouble(row[4]);
+            LocalDate settlement = LocalDate.parse(row[6].trim());
+            switch (kind) {
+                case "OUTRIGHT" -> add(instruments,
+                        new FxForward(row[0], fxPairs.get(row[2].trim()), direction, contractRate, settlement));
+                case "NDF" -> add(instruments, new FxNdf(row[0], fxPairs.get(row[2].trim()), direction,
+                        contractRate, LocalDate.parse(row[5].trim()), settlement));
+                default -> throw new IllegalArgumentException("FX Forward " + row[0]
+                        + " has unknown kind '" + kind + "'; expected OUTRIGHT or NDF");
+            }
+        }
+
         List<Position> positions = new ArrayList<>();
         for (String[] row : rows(csv.book())) {
             Instrument instrument = instruments.get(row[1]);
@@ -141,7 +162,13 @@ public record ReferenceData(Map<String, Instrument> instruments, Book book, List
      * '#' are ignored. An empty string means none of that kind.
      */
     public record Csv(String treasuries, String futures, String ratingBuckets, String issuers, String corporates,
-                      String swaps, String book) {
+                      String swaps, String fxForwards, String book) {
+
+        /** Reference data with no FX Forwards, for tests that predate them. */
+        public Csv(String treasuries, String futures, String ratingBuckets, String issuers, String corporates,
+                   String swaps, String book) {
+            this(treasuries, futures, ratingBuckets, issuers, corporates, swaps, "", book);
+        }
     }
 
     /** Data rows of a CSV with a header line; blank lines and lines starting with '#' are ignored. */
