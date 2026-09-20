@@ -6,5 +6,6 @@ public enum InstrumentType {
     CORPORATE_BOND,
     INTEREST_RATE_SWAP,
     FX_FORWARD,
-    FX_NDF
+    FX_NDF,
+    SWAPTION
 }

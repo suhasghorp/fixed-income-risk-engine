@@ -5,6 +5,7 @@ import com.fixedincomerisk.credit.CreditParameters;
 import com.fixedincomerisk.book.Position;
 import com.fixedincomerisk.curve.CurveSource;
 import com.fixedincomerisk.instrument.Instrument;
+import com.fixedincomerisk.instrument.Swaption;
 import com.fixedincomerisk.market.FxPair;
 import com.fixedincomerisk.market.FxPairs;
 import com.fixedincomerisk.market.Pillar;
@@ -94,13 +95,19 @@ public record SessionConfig(
                         + "; configured " + fxSpot.keySet());
             }
         }
-        // A Book Position whose pair is not simulated fails here, not mid-tick with an empty FX market.
+        // A Book Position whose pair or Surface Point is not simulated fails here, not mid-tick with an
+        // empty FX market or an unquoted volatility.
         for (Instrument instrument : referenceData.book().positions().stream().map(Position::instrument).toList()) {
             String pair = instrument.fxPair().orElse(null);
             if (pair != null && fxPairs.pairs().stream().noneMatch(p -> p.pair().equals(pair))) {
                 throw new IllegalArgumentException("Instrument " + instrument.id() + " is priced from " + pair
                         + ", which refdata/fx-pairs.csv does not configure; configured "
                         + fxPairs.pairs().stream().map(FxPair::pair).toList());
+            }
+            if (instrument instanceof Swaption swaption && !surfacePoints.has(swaption.surfacePoint().label())) {
+                throw new IllegalArgumentException("Swaption " + swaption.id() + " prices off Surface Point "
+                        + swaption.surfacePoint().label() + ", which risk.vol.surface-points does not name; it "
+                        + "names " + surfacePoints.labels());
             }
         }
         for (FxPair pair : fxPairs.nonDeliverable()) {

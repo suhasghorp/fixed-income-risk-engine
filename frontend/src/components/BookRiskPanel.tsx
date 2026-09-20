@@ -20,6 +20,7 @@ const INSTRUMENT_TYPE_LABEL: Record<string, string> = {
   INTEREST_RATE_SWAP: 'Swaps',
   FX_FORWARD: 'FX outrights',
   FX_NDF: 'NDFs',
+  SWAPTION: 'Swaptions',
 };
 
 const GRID_STEP = 1_000;

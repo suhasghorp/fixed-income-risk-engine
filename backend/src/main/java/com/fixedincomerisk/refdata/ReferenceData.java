@@ -12,9 +12,11 @@ import com.fixedincomerisk.instrument.FxNdf;
 import com.fixedincomerisk.instrument.Instrument;
 import com.fixedincomerisk.instrument.InterestRateSwap;
 import com.fixedincomerisk.instrument.ProxyBond;
+import com.fixedincomerisk.instrument.Swaption;
 import com.fixedincomerisk.instrument.TreasuryBond;
 import com.fixedincomerisk.instrument.TreasuryFuture;
 import com.fixedincomerisk.market.FxPairs;
+import com.fixedincomerisk.market.SurfacePoint;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -65,17 +67,18 @@ public record ReferenceData(Map<String, Instrument> instruments, Book book, List
                 resource("/refdata/corporates.csv"),
                 resource("/refdata/swaps.csv"),
                 resource("/refdata/fx-forwards.csv"),
+                resource("/refdata/swaptions.csv"),
                 resource("/refdata/book.csv")));
     }
 
     /** Reference data with Treasuries only. */
     public static ReferenceData parse(Reader treasuriesCsv, Reader bookCsv) {
-        return parse(new Csv(read(treasuriesCsv), "", "", "", "", "", "", read(bookCsv)));
+        return parse(new Csv(read(treasuriesCsv), "", "", "", "", "", "", "", read(bookCsv)));
     }
 
     /** Reference data with Treasuries and futures, and no credit. */
     public static ReferenceData parse(Reader treasuriesCsv, Reader futuresCsv, Reader bookCsv) {
-        return parse(new Csv(read(treasuriesCsv), read(futuresCsv), "", "", "", "", "", read(bookCsv)));
+        return parse(new Csv(read(treasuriesCsv), read(futuresCsv), "", "", "", "", "", "", read(bookCsv)));
     }
 
     public static ReferenceData parse(Csv csv) {
@@ -140,6 +143,18 @@ public record ReferenceData(Map<String, Instrument> instruments, Book book, List
             }
         }
 
+        // A Swaption owns no terms of its own: the row's direction and strike are the underlying swap's,
+        // and the expiry date is its effective date. Building the swap first is what makes that true
+        // rather than merely documented.
+        for (String[] row : rows(csv.swaptions())) {
+            LocalDate expiry = LocalDate.parse(row[3]);
+            InterestRateSwap underlying = new InterestRateSwap(row[0] + "-SWAP",
+                    InterestRateSwap.Direction.valueOf(row[1]), Double.parseDouble(row[2]) / 100.0,
+                    expiry, LocalDate.parse(row[4]));
+            add(instruments, new Swaption(row[0], expiry,
+                    new SurfacePoint(underlying.currency(), row[5]), underlying));
+        }
+
         List<Position> positions = new ArrayList<>();
         for (String[] row : rows(csv.book())) {
             Instrument instrument = instruments.get(row[1]);
@@ -162,12 +177,18 @@ public record ReferenceData(Map<String, Instrument> instruments, Book book, List
      * '#' are ignored. An empty string means none of that kind.
      */
     public record Csv(String treasuries, String futures, String ratingBuckets, String issuers, String corporates,
-                      String swaps, String fxForwards, String book) {
+                      String swaps, String fxForwards, String swaptions, String book) {
+
+        /** Reference data with no Swaptions, for tests that predate them. */
+        public Csv(String treasuries, String futures, String ratingBuckets, String issuers, String corporates,
+                   String swaps, String fxForwards, String book) {
+            this(treasuries, futures, ratingBuckets, issuers, corporates, swaps, fxForwards, "", book);
+        }
 
         /** Reference data with no FX Forwards, for tests that predate them. */
         public Csv(String treasuries, String futures, String ratingBuckets, String issuers, String corporates,
                    String swaps, String book) {
-            this(treasuries, futures, ratingBuckets, issuers, corporates, swaps, "", book);
+            this(treasuries, futures, ratingBuckets, issuers, corporates, swaps, "", "", book);
         }
     }
 

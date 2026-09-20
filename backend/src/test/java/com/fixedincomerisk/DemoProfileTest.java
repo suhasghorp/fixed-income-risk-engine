@@ -8,10 +8,12 @@ import com.fixedincomerisk.curve.BundledCurveSource;
 import com.fixedincomerisk.curve.BundledEcbCurveSource;
 import com.fixedincomerisk.curve.CurveSource;
 import com.fixedincomerisk.curve.CurveSourceChoice;
+import com.fixedincomerisk.instrument.Swaption;
 import com.fixedincomerisk.market.FxFixings;
 import com.fixedincomerisk.market.MarketState;
 import com.fixedincomerisk.market.RiskFactorId;
 import com.fixedincomerisk.model.CorrelationMatrix;
+import com.fixedincomerisk.refdata.ReferenceData;
 import com.fixedincomerisk.session.RiskSession;
 import com.fixedincomerisk.session.RiskSnapshot.BookRisk;
 import com.fixedincomerisk.session.RiskSnapshot.CurrencyRates;
@@ -335,14 +337,24 @@ class DemoProfileTest {
             BookRisk book = session.snapshot().bookRisk();
 
             assertThat(session.snapshot().tick()).isEqualTo(24);
-            assertThat(book.dv01()).isCloseTo(20_878.5301, within(5e-5));
-            assertThat(book.value()).isCloseTo(33_011_173.5634, within(5e-4));
+            assertThat(book.dv01()).isCloseTo(25_383.8273, within(5e-5));
+            assertThat(book.value()).isCloseTo(33_661_279.4369, within(5e-4));
+            // The two Swaptions are the whole of the change from the previous anchor. Value and DV01 are
+            // simple sums at the Book level, so subtracting the new Positions has to give back exactly
+            // what the Book read before they were added — which is the check that adding them repriced
+            // nothing else.
+            PositionResult payer = position(session, "P20");
+            PositionResult receiver = position(session, "P21");
+            assertThat(book.value() - payer.value() - receiver.value())
+                    .isCloseTo(33_011_173.5634, within(5e-4));
+            assertThat(book.dv01() - payer.dv01() - receiver.dv01())
+                    .isCloseTo(20_878.5301, within(5e-5));
             // Two curves now. The Book holds no euro Position yet, so every basis point is still a
             // dollar one and the EUR line is present and empty — which is the thing worth asserting.
             assertThat(book.ratesByCurrency()).hasSize(2);
             assertThat(book.ratesByCurrency().get(0)).satisfies(usd -> {
                 assertThat(usd.currency()).isEqualTo("USD");
-                assertThat(usd.dv01()).isCloseTo(20_597.6018, within(5e-5));
+                assertThat(usd.dv01()).isCloseTo(25_102.8991, within(5e-5));
                 // The headline is no longer any one currency's DV01: it is a basis point of each, added
                 // up. That it now differs from USD alone is the whole reason it carries a label.
                 assertThat(usd.dv01()).isNotEqualTo(book.dv01());
@@ -356,6 +368,73 @@ class DemoProfileTest {
             assertThat(book.ratesByCurrency().stream().mapToDouble(CurrencyRates::dv01).sum())
                     .isCloseTo(book.dv01(), within(5e-9));
         });
+    }
+
+    /**
+     * The Book's first optionality. Two Positions, deliberately different: one that reaches its Expiry
+     * inside a demo run and one that never does, so the Book always holds a live option whichever moment
+     * the run is frozen at.
+     */
+    @Test
+    void bothSwaptionsLoadWithTheirUnderlyingSwapsTermsAndOneExpiresOnScreen() {
+        runner("demo").run(context -> {
+            RiskSession session = context.getBean(RiskSession.class);
+            for (int tick = 1; tick <= 24; tick++) {
+                session.step();
+            }
+            LocalDate start = LocalDate.parse(session.snapshot().session().curveDate());
+            int ticksPerDay = session.snapshot().session().ticksPerDay();
+
+            PositionResult payer = position(session, "P20");
+            assertThat(payer.instrumentType()).isEqualTo("SWAPTION");
+            assertThat(payer.notionalCurrency()).isEqualTo("USD");
+            // A premium is paid, so a Swaption Position is worth something positive from the first tick.
+            assertThat(payer.value()).isPositive();
+            // A payer gains as rates rise, the same side of the market as the pay-fixed swap P16.
+            assertThat(payer.dv01()).isNegative();
+            assertThat(position(session, "P16").dv01()).isNegative();
+
+            PositionResult receiver = position(session, "P21");
+            assertThat(receiver.instrumentType()).isEqualTo("SWAPTION");
+            assertThat(receiver.value()).isPositive();
+            assertThat(receiver.dv01()).isPositive();
+            assertThat(position(session, "P17").dv01()).isPositive();
+
+            assertThat(session.snapshot().bookRisk().byInstrumentType())
+                    .extracting(InstrumentTypeRisk::instrumentType).contains("SWAPTION");
+
+            // The 1M payer reaches its Expiry inside the demo's tick budget; the 1Y receiver cannot,
+            // which is why the Book still holds optionality at the end of a run.
+            Swaption payerTerms = swaption(context, "SWPN-1Mx5Y-PAY");
+            Swaption receiverTerms = swaption(context, "SWPN-1Yx10Y-REC");
+            assertThat(ticksTo(start, payerTerms.expiryDate(), ticksPerDay)).isEqualTo(720).isLessThan(DEMO_TICKS);
+            assertThat(ticksTo(start, receiverTerms.expiryDate(), ticksPerDay)).isGreaterThan(DEMO_TICKS);
+
+            // The terms are the underlying swap's, and the strike is the one written into the CSV rather
+            // than one computed at startup: 4.8017%, the Forward Swap Rate on the session's start date.
+            assertThat(payerTerms.isPayer()).isTrue();
+            assertThat(payerTerms.strike()).isCloseTo(0.048017, within(1e-15));
+            assertThat(payerTerms.expiryDate()).isEqualTo(payerTerms.underlying().effectiveDate());
+            assertThat(payerTerms.underlying().maturityDate()).isEqualTo(LocalDate.of(2031, 10, 11));
+            assertThat(payerTerms.surfacePoint().label()).isEqualTo("USD 1Mx5Y");
+            assertThat(receiverTerms.isPayer()).isFalse();
+            assertThat(receiverTerms.strike()).isCloseTo(0.051025, within(1e-15));
+            assertThat(receiverTerms.surfacePoint().label()).isEqualTo("USD 1Yx10Y");
+            // Each prices off its own point, and the two points are quoted at different volatilities.
+            assertThat(session.marketState().vols().normalVol("USD 1Mx5Y"))
+                    .isNotEqualTo(session.marketState().vols().normalVol("USD 1Yx10Y"));
+        });
+    }
+
+    /** The demo's long-run budget, as PLAN.md sizes it: about 760 ticks, roughly 32 simulated days. */
+    private static final int DEMO_TICKS = 760;
+
+    private static int ticksTo(LocalDate from, LocalDate to, int ticksPerDay) {
+        return (int) java.time.temporal.ChronoUnit.DAYS.between(from, to) * ticksPerDay;
+    }
+
+    private static Swaption swaption(org.springframework.context.ApplicationContext context, String id) {
+        return (Swaption) ReferenceData.fromClasspath().instruments().get(id);
     }
 
     @Test
@@ -417,27 +496,55 @@ class DemoProfileTest {
     /** A point named with no level, or with no shock of its own, fails at startup naming the offender. */
     @Test
     void aSurfacePointThatIsNotFullyConfiguredFailsAtStartup() {
-        runner("demo").withPropertyValues("risk.vol.surface-points=USD 1Mx5Y, USD 3Mx2Y")
+        runner("demo").withPropertyValues("risk.vol.surface-points=USD 1Mx5Y, USD 1Yx10Y, USD 3Mx2Y")
                 .run(context -> assertThat(context).getFailure().rootCause()
                         .hasMessageContaining("USD 3Mx2Y")
                         .hasMessageContaining("risk.vol.USD.3Mx2Y.long-run-mean-bp"));
         runner("demo").withPropertyValues(
-                        "risk.vol.surface-points=USD 1Mx5Y, USD 3Mx2Y",
+                        "risk.vol.surface-points=USD 1Mx5Y, USD 1Yx10Y, USD 3Mx2Y",
                         "risk.vol.USD.3Mx2Y.long-run-mean-bp=90")
                 .run(context -> assertThat(context).getFailure().rootCause()
                         .hasMessageContaining("risk.correlation.factors must name 'normalVol.USD.3Mx2Y'")
                         .hasMessageContaining("Surface Point USD 3Mx2Y is quoted"));
-        // A currency with no Curve Source has no market to quote a volatility against.
+        // A currency with no Curve Source has no market to quote a volatility against. The Book's own
+        // two points stay configured here, so it is the KRW point that fails and not the Swaptions.
         runner("demo").withPropertyValues(
-                        "risk.vol.surface-points=KRW 1Mx5Y",
+                        "risk.vol.surface-points=USD 1Mx5Y, USD 1Yx10Y, KRW 1Mx5Y",
                         "risk.vol.KRW.1Mx5Y.long-run-mean-bp=90",
                         "risk.correlation.factors=shortRate.USD, systemic, shortRate.EUR, fxSpot.EURUSD, "
-                                + "fxSpot.USDKRW, ndfPoints.USDKRW, normalVol.KRW.1Mx5Y, basis",
-                        "risk.correlation.matrix=1,0,0,0,0,0,0,0; 0,1,0,0,0,0,0,0; 0,0,1,0,0,0,0,0; "
-                                + "0,0,0,1,0,0,0,0; 0,0,0,0,1,0,0,0; 0,0,0,0,0,1,0,0; 0,0,0,0,0,0,1,0; "
-                                + "0,0,0,0,0,0,0,1")
+                                + "fxSpot.USDKRW, ndfPoints.USDKRW, normalVol.USD.1Mx5Y, normalVol.USD.1Yx10Y, "
+                                + "normalVol.KRW.1Mx5Y, basis",
+                        "risk.correlation.matrix=" + identity(10))
                 .run(context -> assertThat(context).getFailure().rootCause()
                         .hasMessageContaining("Surface Point KRW 1Mx5Y is quoted in KRW, which has no Curve Source"));
+    }
+
+    /**
+     * The Book's own Positions are checked against the configured surface too: a Swaption priced off a
+     * point nobody quotes fails at startup, not mid-tick with an empty volatility surface.
+     */
+    @Test
+    void aSwaptionWhoseSurfacePointIsNotQuotedFailsAtStartup() {
+        runner("demo").withPropertyValues(
+                        "risk.vol.surface-points=USD 1Mx5Y",
+                        "risk.correlation.factors=shortRate.USD, systemic, shortRate.EUR, fxSpot.EURUSD, "
+                                + "fxSpot.USDKRW, ndfPoints.USDKRW, normalVol.USD.1Mx5Y, basis",
+                        "risk.correlation.matrix=" + identity(8))
+                .run(context -> assertThat(context).getFailure().rootCause()
+                        .hasMessageContaining("Swaption SWPN-1Yx10Y-REC prices off Surface Point USD 1Yx10Y")
+                        .hasMessageContaining("[USD 1Mx5Y]"));
+    }
+
+    /** An n x n identity matrix in the property format: rows by ';', entries by ','. */
+    private static String identity(int size) {
+        StringBuilder matrix = new StringBuilder();
+        for (int row = 0; row < size; row++) {
+            for (int column = 0; column < size; column++) {
+                matrix.append(row == column ? 1 : 0).append(column == size - 1 ? "" : ",");
+            }
+            matrix.append(row == size - 1 ? "" : "; ");
+        }
+        return matrix.toString();
     }
 
     @Test

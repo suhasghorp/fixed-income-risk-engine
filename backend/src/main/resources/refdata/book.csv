@@ -20,3 +20,7 @@ P17,IRS-10Y-REC,15000000
 # FX Forwards: quantity is the notional in the Instrument's Notional Currency, EUR then USD.
 P18,FXF-EURUSD-3M,10000000
 P19,NDF-USDKRW-1M,5000000
+# Swaptions: quantity is the underlying swap's notional. P18 and P19 are the FX Forwards above, so these
+# take the next two ids.
+P20,SWPN-1Mx5Y-PAY,25000000
+P21,SWPN-1Yx10Y-REC,20000000

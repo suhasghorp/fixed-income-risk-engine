@@ -1,0 +1,19 @@
+# European swaption terms. Physically settled, the USD market convention: exercising leaves the Position
+# holding the underlying swap, not a cash amount.
+#
+# The swaption owns no terms of its own. `direction` and `strike` are the underlying swap's, so PAY_FIXED
+# is a payer swaption struck at that fixed rate, and the underlying's effective date IS the expiry date
+# below - there is no separate start. The underlying is a vanilla swap on the usual conventions (fixed
+# semi-annual 30/360 vs the 3-month index quarterly ACT/360); dates are unadjusted. The notional is the
+# Position's quantity.
+#
+# Both are struck at the Forward Swap Rate as of the session's start date, 2026-09-11, on the bundled
+# Treasury curve, rounded to 0.01bp: 4.801677% and 5.102496%. The rate is written here rather than
+# computed at startup so the file records what was struck - a run on a live curve starts away from the
+# money, which is the honest outcome and not a bug.
+#
+# `surfacePoint` names the one point on the volatility surface the option prices from. There is no grid
+# and no interpolation between points, so it must be a point risk.vol.surface-points configures.
+swaptionId,direction,strike,expiryDate,underlyingMaturityDate,surfacePoint
+SWPN-1Mx5Y-PAY,PAY_FIXED,4.8017,2026-10-11,2031-10-11,1Mx5Y
+SWPN-1Yx10Y-REC,RECEIVE_FIXED,5.1025,2027-09-11,2037-09-11,1Yx10Y
