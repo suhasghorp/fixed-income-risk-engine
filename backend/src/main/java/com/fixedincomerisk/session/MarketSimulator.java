@@ -15,7 +15,9 @@ import com.fixedincomerisk.instrument.Instrument;
 import com.fixedincomerisk.instrument.FxNdf;
 import com.fixedincomerisk.instrument.InterestRateSwap;
 import com.fixedincomerisk.instrument.ProxyBond;
+import com.fixedincomerisk.instrument.Swaption;
 import com.fixedincomerisk.instrument.TreasuryFuture;
+import com.fixedincomerisk.market.ExerciseHistory;
 import com.fixedincomerisk.market.FixingHistory;
 import com.fixedincomerisk.market.MarketState;
 import com.fixedincomerisk.market.SurfacePoint;
@@ -94,6 +96,9 @@ final class MarketSimulator {
     /** The Book's NDFs, and the FX Fixings that strike their settlements. */
     private final List<FxNdf> ndfs;
     private final FxFixingHistory fxFixingHistory = new FxFixingHistory();
+    /** The Book's Swaptions, and the Exercise Decisions taken at their Expiries. */
+    private final List<Swaption> swaptions;
+    private final ExerciseHistory exerciseHistory = new ExerciseHistory();
 
     private MarketState market;
 
@@ -138,6 +143,12 @@ final class MarketSimulator {
                 .filter(FxNdf.class::isInstance)
                 .map(FxNdf.class::cast)
                 .toList();
+        this.swaptions = config.referenceData().book().positions().stream()
+                .map(Position::instrument)
+                .distinct()
+                .filter(Swaption.class::isInstance)
+                .map(Swaption.class::cast)
+                .toList();
         seedFixings();
         this.market = currentMarket();
     }
@@ -180,6 +191,11 @@ final class MarketSimulator {
         if (step.isDayRollover()) {
             recordFixings();
             recordFxFixings();
+            // In this order: a Swaption's Exercise Decision is read off its underlying's Forward Swap
+            // Rate, and on the Expiry that swap's first floating period is already running, so its
+            // Fixing has to exist before the rate can be computed.
+            recordSwaptionFixings();
+            recordExerciseDecisions();
         }
         market = currentMarket();
         return tick(step.isDayRollover(), events, switches, tickShocks);
@@ -202,7 +218,7 @@ final class MarketSimulator {
 
     private MarketState currentMarket() {
         return new MarketState(clock.valuationDate(), curves(), futuresBasis.state(), creditMarket(),
-                fixingHistory.fixings(), fxMarket(), volMarket());
+                fixingHistory.fixings(), fxMarket(), volMarket(), exerciseHistory.decisions());
     }
 
     /** Every Surface Point's Normal Volatility, in decimal, by the point's label. */
@@ -300,6 +316,48 @@ final class MarketSimulator {
                 fxFixingHistory.record(ndf.pair().pair(), ndf.fixingDate(),
                         fxSpots.get(ndf.pair().pair()).spot());
             }
+        }
+    }
+
+    /**
+     * Records the Fixing of a Swaption's underlying swap on each of its reset dates, from the Expiry
+     * onwards. The underlying's effective date <em>is</em> the Expiry, so its first floating period
+     * starts later than the session does and is not seeded at startup — the one thing that makes a
+     * swaption price wrong while looking plausible.
+     *
+     * <p>An unexercised option's swap never starts, so only the Expiry's own Fixing is recorded for it,
+     * and that one is needed to make the decision in the first place.
+     */
+    private void recordSwaptionFixings() {
+        MarketState today = new MarketState(clock.valuationDate(), curves());
+        for (Swaption swaption : swaptions) {
+            boolean deciding = clock.valuationDate().equals(swaption.expiryDate());
+            boolean live = deciding
+                    || exerciseHistory.decisions().on(swaption.id(), swaption.expiryDate()).orElse(false);
+            InterestRateSwap underlying = swaption.underlying();
+            if (live && underlying.resetDates().contains(today.valuationDate())) {
+                fixingHistory.record(today.valuationDate(),
+                        FixingHistory.indexRate(today, underlying.currency(), today.valuationDate()));
+            }
+        }
+    }
+
+    /**
+     * Records each Swaption's Exercise Decision on the Day Rollover onto its Expiry, from that day's
+     * curve: a payer exercises when the Forward Swap Rate is above its strike, a receiver when it is
+     * below. Recorded once and never revisited — if rates move back through the strike on the next Tick,
+     * the recorded decision stands, because a decision that is recomputed is not a decision.
+     */
+    private void recordExerciseDecisions() {
+        MarketState today = new MarketState(clock.valuationDate(), curves(), Map.of(),
+                MarketState.CreditMarket.NONE, fixingHistory.fixings());
+        for (Swaption swaption : swaptions) {
+            if (!clock.valuationDate().equals(swaption.expiryDate())) {
+                continue;
+            }
+            double forward = swaption.underlying().forwardRate(today);
+            boolean inTheMoney = swaption.isPayer() ? forward > swaption.strike() : forward < swaption.strike();
+            exerciseHistory.record(swaption.id(), swaption.expiryDate(), inTheMoney);
         }
     }
 

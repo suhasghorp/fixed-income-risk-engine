@@ -88,35 +88,42 @@ public record Swaption(String id, LocalDate expiryDate, SurfacePoint surfacePoin
      * underlying swap is exposed to — taken from the swap itself, so the option depends on exactly the
      * curve it is priced off, at exactly the Pillars that carry it.
      *
-     * <p>From the Expiry onwards everything but the Valuation Date drops out, which matches the value
-     * below. That is one of the two post-Expiry states; the other, where the underlying's Pillars and
-     * Fixings arrive instead, is the Exercise Decision and belongs to issue 04. Dependencies changing at
-     * runtime is established either way; ADR-0003.
+     * <p>At the Expiry the Normal Volatility drops out either way, and the rest depends on the Exercise
+     * Decision: an exercised Swaption keeps the underlying's Pillars, because it <em>is</em> the
+     * underlying now; an unexercised one is worth zero and depends on nothing but the Valuation Date.
+     * Dependencies changing at runtime is established; ADR-0003.
      */
     @Override
     public Set<RiskFactorId> riskFactors(MarketState market, List<Pillar> pillars) {
         if (!market.valuationDate().isBefore(expiryDate)) {
-            return Set.of(RiskFactorId.valuationDate(currency()));
+            return wasExercised(market)
+                    ? Set.copyOf(underlying.riskFactors(market, pillars))
+                    : Set.of(RiskFactorId.valuationDate(currency()));
         }
         Set<RiskFactorId> factors = new LinkedHashSet<>(underlying.riskFactors(market, pillars));
         factors.add(surfacePoint.volFactor());
         return factors;
     }
 
+    /** The recorded Exercise Decision; before the Expiry there is nothing to ask about. */
+    public boolean wasExercised(MarketState market) {
+        return !market.valuationDate().isBefore(expiryDate)
+                && market.exercises().wasExercised(id, expiryDate);
+    }
+
     /**
-     * The premium per unit of the underlying's notional: an option is bought, so this is never negative
-     * whichever way the market has moved.
+     * Before Expiry, the premium per unit of the underlying's notional: an option is bought, so it is
+     * never negative whichever way the market has moved. From the Expiry it is the underlying swap if the
+     * recorded Exercise Decision says so, and exactly zero if it does not — at which point it can and
+     * does go negative, because it is a swap now and no longer an option.
      *
-     * <p>Worth nothing from the Expiry onwards, which is the unexercised state. The exercised one — where
-     * the Position becomes worth the underlying swap — is the Exercise Decision, and it is issue 04's.
-     * Note what the seam is: from the Expiry the underlying is running, so its first floating period
-     * needs a recorded Fixing, and there is nothing to record it yet. Pricing through that date without
-     * one is how a swaption comes out wrong while looking plausible, so this does not price through it.
+     * <p>The Position never moves and the Book never changes shape; what changed is what this Position
+     * <em>is</em>. ADR-0012.
      */
     @Override
     public double dirtyValue(MarketState market) {
         if (!market.valuationDate().isBefore(expiryDate)) {
-            return 0;
+            return wasExercised(market) ? underlying.dirtyValue(market) : 0;
         }
         double annuity = underlying.annuity(market);
         if (annuity <= 0) {
@@ -148,11 +155,22 @@ public record Swaption(String id, LocalDate expiryDate, SurfacePoint surfacePoin
     }
 
     /**
-     * None. An Exercise pays nothing — it changes what the Position is, which is why it is not a Lifecycle
-     * Event. Once exercised, the underlying swap's own coupons are the cash flows; ADR-0012.
+     * None before Expiry, and none for the Exercise itself: an Exercise pays nothing, which is why it is
+     * not a Lifecycle Event. Once exercised the Position holds a swap, so the swap's own coupons flow as
+     * ordinary Lifecycle Events from then on. ADR-0012.
      */
     @Override
     public List<CashFlow> cashFlowsPaid(MarketState market, LocalDate from, LocalDate to) {
-        return List.of();
+        return wasExercised(market) ? underlying.cashFlowsPaid(market, from, to) : List.of();
+    }
+
+    /**
+     * The underlying's. An option accrues nothing, and this signature carries no market to read the
+     * Exercise Decision from — which costs nothing, because a swap in this engine accrues nothing either:
+     * its coupons are Lifecycle Events, not accruals carried in the price.
+     */
+    @Override
+    public double accruedInterest(LocalDate valuationDate) {
+        return underlying.accruedInterest(valuationDate);
     }
 }

@@ -9,8 +9,10 @@ import com.fixedincomerisk.curve.BundledEcbCurveSource;
 import com.fixedincomerisk.curve.CurveSource;
 import com.fixedincomerisk.curve.CurveSourceChoice;
 import com.fixedincomerisk.instrument.Swaption;
+import com.fixedincomerisk.market.ExerciseDecisions;
 import com.fixedincomerisk.market.FxFixings;
 import com.fixedincomerisk.market.MarketState;
+import com.fixedincomerisk.market.Pillar;
 import com.fixedincomerisk.market.RiskFactorId;
 import com.fixedincomerisk.model.CorrelationMatrix;
 import com.fixedincomerisk.refdata.ReferenceData;
@@ -424,6 +426,63 @@ class DemoProfileTest {
             assertThat(session.marketState().vols().normalVol("USD 1Mx5Y"))
                     .isNotEqualTo(session.marketState().vols().normalVol("USD 1Yx10Y"));
         });
+    }
+
+    /**
+     * The article's moment. The 1M payer reaches its Expiry on screen at tick 720 and — this is what seed
+     * 42 decided, not what anyone chose — expires <em>worthless</em>, by 8.4bp. It is struck at the
+     * Forward Swap Rate on the session's start date, 4.8017%, and thirty simulated days later the forward
+     * is 4.7178%. A payer that cannot be exercised profitably is not exercised.
+     *
+     * <p>The Position stays exactly where it is, worth nothing. That is ADR-0012: an Exercise changes
+     * what a Position is, not what the Book holds.
+     */
+    @Test
+    void thePayerReachesItsExpiryOnScreenAndTheDecisionIsRecordedOnce() {
+        runner("demo").run(context -> {
+            RiskSession session = context.getBean(RiskSession.class);
+            List<String> positionsBefore = null;
+            for (int tick = 1; tick <= 744; tick++) {
+                if (tick == 720) {
+                    positionsBefore = positionIds(session);
+                    assertThat(session.marketState().exercises().isEmpty())
+                            .as("undecided the tick before the Day Rollover onto Expiry").isTrue();
+                }
+                session.step();
+            }
+            LocalDate expiry = LocalDate.of(2026, 10, 11);
+            MarketState market = session.marketState();
+            Swaption payer = swaption(context, "SWPN-1Mx5Y-PAY");
+
+            // Recorded exactly once, on the Day Rollover onto the Expiry, and nothing else decided.
+            assertThat(market.exercises().keys())
+                    .containsExactly(new ExerciseDecisions.Key("SWPN-1Mx5Y-PAY", expiry));
+            // Out of the money by 8.4bp: the forward finished below the strike it was struck at.
+            assertThat(payer.underlying().forwardRate(market)).isLessThan(payer.strike());
+            assertThat(market.exercises().wasExercised("SWPN-1Mx5Y-PAY", expiry)).isFalse();
+
+            // The underlying's first floating period starts at the Expiry, and its Fixing was taken there.
+            assertThat(market.fixings().on(expiry)).isPresent();
+
+            // Worth nothing, carrying nothing, and still in the Book in the same place.
+            PositionResult lapsed = position(session, "P20");
+            assertThat(lapsed.value()).isZero();
+            assertThat(lapsed.dv01()).isZero();
+            assertThat(lapsed.instrumentType()).isEqualTo("SWAPTION");
+            assertThat(positionIds(session)).isEqualTo(positionsBefore).contains("P20", "P21");
+
+            // The 1Y receiver has not expired, so the Book still holds live optionality and still
+            // depends on the volatility surface.
+            assertThat(position(session, "P21").value()).isPositive();
+            assertThat(swaption(context, "SWPN-1Yx10Y-REC").riskFactors(market, Pillar.DEFAULTS))
+                    .contains(RiskFactorId.normalVol("USD", "1Yx10Y"));
+            assertThat(payer.riskFactors(market, Pillar.DEFAULTS))
+                    .containsExactly(RiskFactorId.valuationDate("USD"));
+        });
+    }
+
+    private static List<String> positionIds(RiskSession session) {
+        return session.snapshot().positions().stream().map(PositionResult::positionId).toList();
     }
 
     /** The demo's long-run budget, as PLAN.md sizes it: about 760 ticks, roughly 32 simulated days. */

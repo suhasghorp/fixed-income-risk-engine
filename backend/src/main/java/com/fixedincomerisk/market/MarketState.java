@@ -21,15 +21,23 @@ import java.util.TreeSet;
  * @param fixings the floating index's recorded Fixings
  * @param fx      the simulated FX market: spot per pair, and Forward Points for the non-deliverable ones
  * @param vols    the quoted Normal Volatility at each Surface Point
+ * @param exercises the Exercise Decisions recorded so far, which say what an expired Swaption became
  */
 public record MarketState(LocalDate valuationDate, Map<String, YieldCurve> curves,
                           Map<String, FuturesMarket> futures, CreditMarket credit, Fixings fixings,
-                          FxMarket fx, VolMarket vols) {
+                          FxMarket fx, VolMarket vols, ExerciseDecisions exercises) {
 
     public MarketState {
         // LinkedHashMap, not Map.copyOf: currency order decides the order risk is reported in.
         curves = Collections.unmodifiableMap(new LinkedHashMap<>(curves));
         futures = Map.copyOf(futures);
+    }
+
+    /** A market with nothing exercised yet, which is every market before the first Expiry. */
+    public MarketState(LocalDate valuationDate, Map<String, YieldCurve> curves,
+                       Map<String, FuturesMarket> futures, CreditMarket credit, Fixings fixings,
+                       FxMarket fx, VolMarket vols) {
+        this(valuationDate, curves, futures, credit, fixings, fx, vols, ExerciseDecisions.NONE);
     }
 
     /** A market with no volatility surface: every Instrument that has one is priced from curves alone. */
@@ -77,17 +85,17 @@ public record MarketState(LocalDate valuationDate, Map<String, YieldCurve> curve
 
     /** The same market with other Fixings. */
     public MarketState withFixings(Fixings newFixings) {
-        return new MarketState(valuationDate, curves, futures, credit, newFixings, fx, vols);
+        return new MarketState(valuationDate, curves, futures, credit, newFixings, fx, vols, exercises);
     }
 
     /** The same market with another FX market: used to bump spot or points with everything else fixed. */
     public MarketState withFx(FxMarket newFx) {
-        return new MarketState(valuationDate, curves, futures, credit, fixings, newFx, vols);
+        return new MarketState(valuationDate, curves, futures, credit, fixings, newFx, vols, exercises);
     }
 
     /** The same market with another volatility surface: used to bump a Surface Point for Vega. */
     public MarketState withVols(VolMarket newVols) {
-        return new MarketState(valuationDate, curves, futures, credit, fixings, fx, newVols);
+        return new MarketState(valuationDate, curves, futures, credit, fixings, fx, newVols, exercises);
     }
 
     /**
@@ -99,7 +107,7 @@ public record MarketState(LocalDate valuationDate, Map<String, YieldCurve> curve
         if (bumped.put(currency, newCurve) == null) {
             throw noMarketFor(currency);
         }
-        return new MarketState(valuationDate, bumped, futures, credit, fixings, fx, vols);
+        return new MarketState(valuationDate, bumped, futures, credit, fixings, fx, vols, exercises);
     }
 
     private IllegalArgumentException noMarketFor(String currency) {
@@ -108,7 +116,8 @@ public record MarketState(LocalDate valuationDate, Map<String, YieldCurve> curve
 
     /** The same market with every Mark shifted by {@code shift}: used to bump spreads for CS01. */
     public MarketState withMarksShiftedBy(double shift) {
-        return new MarketState(valuationDate, curves, futures, credit.withMarksShiftedBy(shift), fixings, fx, vols);
+        return new MarketState(valuationDate, curves, futures, credit.withMarksShiftedBy(shift), fixings, fx,
+                vols, exercises);
     }
 
     public double mark(String issuerId) {
