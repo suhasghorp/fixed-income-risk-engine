@@ -198,6 +198,16 @@ h2 {
   overflow-x: auto;
 }
 
+/* Nine Pillars across two currencies is wider than the summary column, so these two tables sit under
+   the grid rather than beside the chart. */
+.rates-by-currency {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+  overflow-x: auto;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -293,6 +303,9 @@ caption {
 caption {
   text-align: left;
   padding-bottom: 6px;
+  /* Cells are nowrap so numbers never break, but a caption is a sentence. Without this it cannot wrap,
+     so it sets its table's minimum width and the table paints over whatever is in the next column. */
+  white-space: normal;
 }
 
 table.compact th,

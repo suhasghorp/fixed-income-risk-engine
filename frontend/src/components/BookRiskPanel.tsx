@@ -89,52 +89,6 @@ export function BookRiskPanel({ bookRisk }: { bookRisk: BookRisk }) {
               </div>
             ))}
           </div>
-          <table className="compact">
-            <caption className="muted">
-              DV01 and Gamma by currency (that curve bumped, the others held fixed). Gamma is the {GAMMA_LABEL}.
-            </caption>
-            <thead>
-              <tr>
-                <th>Currency</th>
-                <th className="num">DV01</th>
-                <th className="num">Gamma</th>
-              </tr>
-            </thead>
-            <tbody>
-              {bookRisk.ratesByCurrency.map((c) => (
-                <tr key={c.currency} className={c.dv01 === 0 ? 'muted' : undefined}>
-                  <td>{c.currency}</td>
-                  <td className={`num ${c.dv01 < 0 ? 'short' : ''}`}>{formatDv01(c.dv01)}</td>
-                  <td className={`num ${c.gamma < 0 ? 'short' : ''}`}>{c.gamma === 0 ? '—' : formatDv01(c.gamma)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <table className="compact">
-            <caption className="muted">Bucketed DV01 by currency (that curve bumped, the others held fixed)</caption>
-            <thead>
-              <tr>
-                <th>Currency</th>
-                {(bookRisk.ratesByCurrency[0]?.bucketedDv01 ?? []).map((b) => (
-                  <th key={b.pillar} className="num">
-                    {b.pillar}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {bookRisk.ratesByCurrency.map((c) => (
-                <tr key={c.currency} className={c.dv01 === 0 ? 'muted' : undefined}>
-                  <td>{c.currency}</td>
-                  {c.bucketedDv01.map((b) => (
-                    <td key={b.pillar} className={`num ${b.dv01 < 0 ? 'short' : ''}`}>
-                      {Math.abs(b.dv01) < 0.5 ? '—' : formatDv01(b.dv01)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
           {bookRisk.fxDeltaByCurrency.length > 0 && (
             <table className="compact">
               <caption className="muted">
@@ -264,6 +218,55 @@ export function BookRiskPanel({ bookRisk }: { bookRisk: BookRisk }) {
             </table>
           </div>
         </figure>
+      </div>
+      {/* Full width: nine Pillars across two currencies does not fit the summary column. */}
+      <div className="rates-by-currency">
+        <table className="compact">
+          <caption className="muted">
+            DV01 and Gamma by currency (that curve bumped, the others held fixed). Gamma is the {GAMMA_LABEL}.
+          </caption>
+          <thead>
+            <tr>
+              <th>Currency</th>
+              <th className="num">DV01</th>
+              <th className="num">Gamma</th>
+            </tr>
+          </thead>
+          <tbody>
+            {bookRisk.ratesByCurrency.map((c) => (
+              <tr key={c.currency} className={c.dv01 === 0 ? 'muted' : undefined}>
+                <td>{c.currency}</td>
+                <td className={`num ${c.dv01 < 0 ? 'short' : ''}`}>{formatDv01(c.dv01)}</td>
+                <td className={`num ${c.gamma < 0 ? 'short' : ''}`}>{c.gamma === 0 ? '—' : formatDv01(c.gamma)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <table className="compact">
+          <caption className="muted">Bucketed DV01 by currency (that curve bumped, the others held fixed)</caption>
+          <thead>
+            <tr>
+              <th>Currency</th>
+              {(bookRisk.ratesByCurrency[0]?.bucketedDv01 ?? []).map((b) => (
+                <th key={b.pillar} className="num">
+                  {b.pillar}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {bookRisk.ratesByCurrency.map((c) => (
+              <tr key={c.currency} className={c.dv01 === 0 ? 'muted' : undefined}>
+                <td>{c.currency}</td>
+                {c.bucketedDv01.map((b) => (
+                  <td key={b.pillar} className={`num ${b.dv01 < 0 ? 'short' : ''}`}>
+                    {Math.abs(b.dv01) < 0.5 ? '—' : formatDv01(b.dv01)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </section>
   );
