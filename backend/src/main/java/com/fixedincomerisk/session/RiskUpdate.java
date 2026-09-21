@@ -10,6 +10,7 @@ import com.fixedincomerisk.session.RiskSnapshot.LifecycleEvent;
 import com.fixedincomerisk.session.RiskSnapshot.PositionResult;
 import com.fixedincomerisk.session.RiskSnapshot.RepricingTelemetry;
 import com.fixedincomerisk.session.RiskSnapshot.SwapView;
+import com.fixedincomerisk.session.RiskSnapshot.SwaptionView;
 import java.util.List;
 
 /**
@@ -29,6 +30,8 @@ import java.util.List;
  * @param credit                the credit market's observable state and Marks (the factors move every Tick)
  * @param swaps                 every swap's current period and Fixing, on a Day Rollover; null if unchanged
  * @param fx                    the FX market and contract terms; null if unchanged
+ * @param swaptions             every Swaption's terms against the market (its vol and forward move every
+ *                              Tick); null if unchanged
  */
 public record RiskUpdate(
         long sequence,
@@ -44,7 +47,8 @@ public record RiskUpdate(
         List<CtdSwitchEvent> ctdSwitches,
         CreditView credit,
         List<SwapView> swaps,
-        FxView fx) {
+        FxView fx,
+        List<SwaptionView> swaptions) {
 
     public RiskUpdate {
         positions = List.copyOf(positions);
@@ -52,6 +56,7 @@ public record RiskUpdate(
         futures = List.copyOf(futures);
         ctdSwitches = List.copyOf(ctdSwitches);
         swaps = swaps == null ? null : List.copyOf(swaps);
+        swaptions = swaptions == null ? null : List.copyOf(swaptions);
     }
 
     public record CurveChange(List<CurvePoint> pillars, List<CurvePoint> points) {

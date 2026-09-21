@@ -24,6 +24,30 @@ export interface RiskSnapshot {
   swaps: SwapView[];
   /** The FX market and each FX Forward's terms, Fixing and quoted forward. */
   fx: FxView;
+  /** Each Swaption's strike against the forward, its quoted vol, and its Exercise Decision once made. */
+  swaptions: SwaptionView[];
+}
+
+/**
+ * A Swaption's terms against the market it prices from: the strike beside the Forward Swap Rate the
+ * Exercise Decision turns on, and the Surface Point's own Normal Volatility beside the Vega.
+ */
+export interface SwaptionView {
+  instrumentId: string;
+  description: string;
+  /** The side the underlying swap would be entered on. */
+  direction: 'PAYER' | 'RECEIVER';
+  /** The one point it prices from, e.g. "USD 1Mx5Y". There is no grid and no interpolation. */
+  surfacePoint: string;
+  strike: number;
+  expiryDate: string;
+  underlyingMaturityDate: string;
+  /** That point's Normal Volatility, in basis points per annum. */
+  normalVolBp: number;
+  /** Null once a lapsed option's swap has no Fixing left to project a rate from. */
+  forwardRate: number | null;
+  /** The Exercise Decision, or null while the Expiry is still ahead. */
+  exercised: boolean | null;
 }
 
 /** A swap's floating leg as of the Valuation Date: the current coupon is known from its Fixing. */
@@ -177,7 +201,11 @@ export interface PositionResult {
   bucketedDv01: BucketDv01[];
   /** One entry per currency the session simulates, in market order. */
   ratesByCurrency: CurrencyRates[];
+  /** How far that DV01 moves when rates do, across every curve. Label it GAMMA_TOTAL_LABEL. */
+  gamma: number;
   cs01: number;
+  /** Value change for a 1bp rise in each currency's Normal Volatility; only a Swaption has any. */
+  vega: CurrencyAmount[];
   /** Value change for a 1% move in each currency against the Reporting Currency. */
   fxDelta: CurrencyAmount[];
   /** Value change for a one-pip move in each NDF pair's Forward Points, spot held fixed. */
@@ -203,7 +231,11 @@ export interface BookRisk {
   bucketedDv01: BucketDv01[];
   /** The rates risk that does net: every currency, including ones the Book has nothing in. */
   ratesByCurrency: CurrencyRates[];
+  /** The Book's DV01 change over the shift, summed from the Positions. Label it GAMMA_TOTAL_LABEL. */
+  gamma: number;
   cs01: number;
+  /** Vega per currency, empty until the Book holds something with optionality in it. */
+  vegaByCurrency: CurrencyAmount[];
   /** FX Delta per currency. There is deliberately no total: these are different risks. */
   fxDeltaByCurrency: CurrencyAmount[];
   /** Points delta per NDF pair, reported apart from FX Delta. */
@@ -221,10 +253,21 @@ export interface CurrencyRates {
   currency: string;
   dv01: number;
   bucketedDv01: BucketDv01[];
+  /** That currency's DV01 measured again with its curve shifted up, minus the DV01 above. */
+  gamma: number;
 }
 
 /** Mirrors RatesSensitivities.TOTAL_LABEL on the backend: what a total across currencies must be called. */
 export const RATES_TOTAL_LABEL = 'all curves, 1bp each';
+
+/**
+ * Mirrors RatesSensitivities.GAMMA_LABEL. A number called "gamma" with no shift attached is meaningless,
+ * and this Book also holds bonds with convexity, which is a different thing wearing a similar name.
+ */
+export const GAMMA_LABEL = 'DV01 change for +25bp';
+
+/** Mirrors RatesSensitivities.GAMMA_TOTAL_LABEL: a Gamma total carries both warnings at once. */
+export const GAMMA_TOTAL_LABEL = 'all curves, +25bp each';
 
 export interface InstrumentTypeRisk {
   instrumentType: string;
@@ -285,6 +328,8 @@ export interface RiskUpdate {
   /** Every swap's current period and Fixing, on a Day Rollover; null if unchanged. */
   swaps: SwapView[] | null;
   fx: FxView | null;
+  /** Every Swaption's terms against the market; its vol and forward move every Tick. Null if unchanged. */
+  swaptions: SwaptionView[] | null;
 }
 
 /** An amount attributed to one currency. Currencies do not net, so these are never summed together. */

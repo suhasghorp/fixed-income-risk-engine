@@ -5,17 +5,25 @@ import com.fixedincomerisk.market.FxPair;
 import com.fixedincomerisk.market.FxPairs;
 import com.fixedincomerisk.market.MarketState;
 import com.fixedincomerisk.market.Pillar;
+import com.fixedincomerisk.market.SurfacePoint;
+import com.fixedincomerisk.market.SurfacePoints;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.DoubleUnaryOperator;
 
 /**
- * DV01 and Bucketed DV01 by central-difference bump-and-reprice of the model's output zero curves.
- * Generic across Instruments: it only calls {@link Instrument#dirtyValue}, so risk is on dirty value.
- * One currency's curve is bumped at a time; every other curve, and every other factor such as a future's
- * Basis, is held fixed. Results are per unit of notional, in value per basis point, positive for a long
- * bond.
+ * Every sensitivity the engine reports, each by bumping one Risk Factor and repricing: DV01 and Bucketed
+ * DV01 off the model's output zero curves, CS01 off the Marks, Vega off a Surface Point, FX Delta and the
+ * points delta off the FX market. Generic across Instruments: it only calls
+ * {@link Instrument#dirtyValue}, so risk is on dirty value, and an Instrument that does not read a factor
+ * measures zero there rather than being excluded by its type. One currency's curve is bumped at a time;
+ * every other curve, and every other factor such as a future's Basis, is held fixed. Results are per unit
+ * of notional, in value per basis point, positive for a long bond.
+ *
+ * <p>{@code gamma} is the exception that proves the rule: it is not a derivative at all but the
+ * <em>difference between two DV01s</em>, measured {@value RatesSensitivities#GAMMA_SHIFT_BP} basis points
+ * apart. It exists because the Book now holds Swaptions, whose DV01 does not stay where it was put.
  */
 public final class SensitivityCalculator {
 
@@ -23,6 +31,8 @@ public final class SensitivityCalculator {
     static final double ONE_PERCENT = 0.01;
     /** Forward Points are simulated in pips, so a pip is their natural bump. */
     static final double ONE_PIP = 1;
+    /** The parallel shift Gamma is measured over, as a decimal: {@link RatesSensitivities#GAMMA_SHIFT_BP}. */
+    static final double GAMMA_SHIFT = RatesSensitivities.GAMMA_SHIFT_BP * ONE_BP;
 
     private final List<Pillar> pillars;
 
@@ -55,7 +65,10 @@ public final class SensitivityCalculator {
             int pillar = i;
             bucketed[i] = bumpAndReprice(instrument, market, currency, t -> ONE_BP * weight(pillar, t));
         }
-        return new CurveSensitivities(dv01, bucketed);
+        // Gamma: the same measurement taken again from a curve shifted up, minus the one just taken.
+        double shifted = bumpAndReprice(instrument, bumped(market, currency, t -> GAMMA_SHIFT), currency,
+                t -> ONE_BP);
+        return new CurveSensitivities(dv01, bucketed, shifted - dv01 + 0.0);
     }
 
     /**
@@ -117,6 +130,35 @@ public final class SensitivityCalculator {
     }
 
     /**
+     * Vega: the change in value for a <strong>1bp rise</strong> in a Surface Point's Normal Volatility, by
+     * bumping that point and repricing with everything else held fixed. Reported per currency and never
+     * netted across them, in the shape FX Delta established: the currencies are different risks.
+     *
+     * <p>Generic like every other sensitivity here, so an Instrument that does not read the surface
+     * measures zero rather than being excluded by its type — and a Surface Point the market does not
+     * quote is skipped rather than invented. Before the engine's first option there are no points at all
+     * and the result is empty, which is how the Vega line stays off the screen until something has some.
+     */
+    public Map<String, Double> vega(Instrument instrument, MarketState market, SurfacePoints surfacePoints) {
+        Map<String, Double> byCurrency = new LinkedHashMap<>();
+        for (SurfacePoint point : surfacePoints.points()) {
+            byCurrency.merge(point.currency(), vega(instrument, market, point), Double::sum);
+        }
+        return byCurrency;
+    }
+
+    /** One Surface Point's contribution, from a central difference about a 1bp move in its vol. */
+    public double vega(Instrument instrument, MarketState market, SurfacePoint point) {
+        if (!market.vols().normalVols().containsKey(point.label())) {
+            return 0;
+        }
+        double vol = market.vols().normalVol(point.label());
+        double up = instrument.dirtyValue(withVol(market, point, vol + ONE_BP));
+        double down = instrument.dirtyValue(withVol(market, point, vol - ONE_BP));
+        return (up - down) / 2;
+    }
+
+    /**
      * Points delta: the change in value for a one-pip move in an NDF's Forward Points, with spot held
      * fixed — mirroring how a future's DV01 holds its Basis fixed. A deliverable forward has none,
      * because its forward rate is derived from two curves rather than quoted.
@@ -137,6 +179,10 @@ public final class SensitivityCalculator {
         double up = instrument.dirtyValue(withPoints(market, pair, points + ONE_PIP));
         double down = instrument.dirtyValue(withPoints(market, pair, points - ONE_PIP));
         return (up - down) / 2;
+    }
+
+    private static MarketState withVol(MarketState market, SurfacePoint point, double vol) {
+        return market.withVols(market.vols().withNormalVol(point.label(), vol));
     }
 
     private static MarketState withSpot(MarketState market, FxPair pair, double spot) {

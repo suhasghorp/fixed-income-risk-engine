@@ -19,6 +19,22 @@ public record RatesSensitivities(Map<String, CurveSensitivities> byCurrency) {
     /** What a total across currencies must be called wherever it is shown. */
     public static final String TOTAL_LABEL = "all curves, 1bp each";
 
+    /**
+     * The parallel shift Gamma is measured over. One basis point of it is numerically invisible on a Book
+     * this size; 25bp is a move a reader can picture and a number that prints.
+     */
+    public static final int GAMMA_SHIFT_BP = 25;
+
+    /**
+     * What Gamma must be called wherever it is shown. A number called "gamma" with no shift attached is
+     * meaningless, and this Book also holds bonds with convexity, which is a different thing wearing a
+     * similar name.
+     */
+    public static final String GAMMA_LABEL = "DV01 change for +" + GAMMA_SHIFT_BP + "bp";
+
+    /** And a Gamma total across currencies carries both warnings at once. */
+    public static final String GAMMA_TOTAL_LABEL = "all curves, +" + GAMMA_SHIFT_BP + "bp each";
+
     public RatesSensitivities {
         byCurrency = Collections.unmodifiableMap(new LinkedHashMap<>(byCurrency));
     }
@@ -61,6 +77,14 @@ public record RatesSensitivities(Map<String, CurveSensitivities> byCurrency) {
             }
         }
         return total == null ? new double[0] : total;
+    }
+
+    /**
+     * Gamma across every curve: {@value #GAMMA_TOTAL_LABEL}. It sums across Positions the way DV01 does,
+     * but it is not a first derivative of anything — it is how far the first derivative itself moved.
+     */
+    public double totalGamma() {
+        return byCurrency.values().stream().mapToDouble(CurveSensitivities::gamma).sum() + 0.0;
     }
 
     /** The sum of every bucket's absolute size, across every curve: how exposed the Instrument is at all. */

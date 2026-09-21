@@ -7,6 +7,7 @@ import { FxPanel } from './components/FxPanel';
 import { LifecycleEvents } from './components/LifecycleEvents';
 import { PositionTable } from './components/PositionTable';
 import { SwapsPanel } from './components/SwapsPanel';
+import { SwaptionsPanel } from './components/SwaptionsPanel';
 import { SessionPanel } from './components/SessionPanel';
 
 export function App() {
@@ -32,6 +33,9 @@ export function App() {
           {snapshot.credit.issuers.length > 0 && <CreditPanel credit={snapshot.credit} tick={snapshot.tick} />}
           {snapshot.swaps.length > 0 && <SwapsPanel swaps={snapshot.swaps} positions={snapshot.positions} />}
           {snapshot.fx.contracts.length > 0 && <FxPanel fx={snapshot.fx} positions={snapshot.positions} />}
+          {snapshot.swaptions.length > 0 && (
+            <SwaptionsPanel swaptions={snapshot.swaptions} positions={snapshot.positions} />
+          )}
           {snapshot.futures.length > 0 && (
             <FuturesPanel
               futures={snapshot.futures}

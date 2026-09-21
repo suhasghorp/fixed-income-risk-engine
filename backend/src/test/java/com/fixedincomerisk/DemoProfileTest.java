@@ -16,7 +16,9 @@ import com.fixedincomerisk.market.Pillar;
 import com.fixedincomerisk.market.RiskFactorId;
 import com.fixedincomerisk.model.CorrelationMatrix;
 import com.fixedincomerisk.refdata.ReferenceData;
+import com.fixedincomerisk.risk.RatesSensitivities;
 import com.fixedincomerisk.session.RiskSession;
+import com.fixedincomerisk.session.RiskSnapshot;
 import com.fixedincomerisk.session.RiskSnapshot.BookRisk;
 import com.fixedincomerisk.session.RiskSnapshot.CurrencyRates;
 import com.fixedincomerisk.session.RiskSnapshot.FxView;
@@ -299,6 +301,116 @@ class DemoProfileTest {
         });
     }
 
+
+    /**
+     * The risk optionality adds, at the frozen Tick. Vega is bump-and-reprice like everything else here,
+     * so every Position measures it and only the two Swaptions have any: <b>USD +7,117.88</b>, all of it
+     * theirs. There is no total across currencies, for the reason FX Delta has none.
+     */
+    @Test
+    void onlyTheSwaptionsHaveVegaAndItRollsUpToTheBook() {
+        runner("demo").run(context -> {
+            RiskSession session = context.getBean(RiskSession.class);
+            for (int tick = 1; tick <= 24; tick++) {
+                session.step();
+            }
+            BookRisk book = session.snapshot().bookRisk();
+
+            assertThat(book.vegaByCurrency()).singleElement().satisfies(vega -> {
+                assertThat(vega.currency()).isEqualTo("USD");
+                assertThat(vega.amount()).isCloseTo(7_117.8830, within(5e-5));
+            });
+            // Both are bought, so both gain when volatility rises; the 1Y receiver holds far more of it,
+            // because Vega scales with the time left and it has a year against the payer's month.
+            assertThat(usdVega(position(session, "P20"))).isCloseTo(1_164.1089, within(5e-5));
+            assertThat(usdVega(position(session, "P21"))).isCloseTo(5_953.7741, within(5e-5));
+            // Every other Position measures a Vega, and every one of them measures exactly zero.
+            assertThat(session.snapshot().positions())
+                    .filteredOn(p -> !p.instrumentType().equals("SWAPTION"))
+                    .hasSize(19)
+                    .allSatisfy(p -> assertThat(usdVega(p)).isZero());
+            assertThat(book.vegaByCurrency().get(0).amount())
+                    .isCloseTo(usdVega(position(session, "P20")) + usdVega(position(session, "P21")),
+                            within(5e-9));
+        });
+    }
+
+    /**
+     * Gamma, and the sentence the whole feature exists to make checkable. The payer's DV01 is −4,058 and
+     * its Gamma is −4,003: shift the curve 25bp and <em>almost all</em> of its rates risk is a different
+     * number. The most convex thing the Book held before the options was the thirty-year bond, and it
+     * moves 5.4% of its DV01 over the same shift. Both are curvature; they are not the same size.
+     */
+    @Test
+    void theSwaptionsDv01IsTheOneThatMovesWhenRatesDo() {
+        runner("demo").run(context -> {
+            RiskSession session = context.getBean(RiskSession.class);
+            for (int tick = 1; tick <= 24; tick++) {
+                session.step();
+            }
+            BookRisk book = session.snapshot().bookRisk();
+            PositionResult payer = position(session, "P20");
+            PositionResult receiver = position(session, "P21");
+
+            assertThat(book.gamma()).isCloseTo(-6_742.8611, within(5e-5));
+            assertThat(payer.gamma()).isCloseTo(-4_003.4059, within(5e-5));
+            assertThat(receiver.gamma()).isCloseTo(-2_000.6470, within(5e-5));
+            // Nearly a whole DV01 of movement on the payer; at most a twentieth of one on everything else.
+            assertThat(Math.abs(payer.gamma() / payer.dv01())).isGreaterThan(0.95);
+            assertThat(session.snapshot().positions())
+                    .filteredOn(p -> !p.instrumentType().equals("SWAPTION"))
+                    .allSatisfy(p -> assertThat(Math.abs(p.gamma())).isLessThan(0.06 * Math.abs(p.dv01())));
+            // It is a simple sum, like DV01 — and it splits per currency the same way, which is the only
+            // split that nets. Both carry their shift size wherever they are shown.
+            assertThat(book.gamma()).isCloseTo(
+                    session.snapshot().positions().stream().mapToDouble(PositionResult::gamma).sum(),
+                    within(5e-9));
+            assertThat(book.ratesByCurrency().stream().mapToDouble(CurrencyRates::gamma).sum())
+                    .isCloseTo(book.gamma(), within(5e-9));
+            assertThat(RatesSensitivities.GAMMA_LABEL).isEqualTo("DV01 change for +25bp");
+            assertThat(RatesSensitivities.GAMMA_TOTAL_LABEL).isEqualTo("all curves, +25bp each");
+        });
+    }
+
+    /**
+     * What the swaptions panel is given: the strike beside the Forward Swap Rate that decides the
+     * Exercise, the Surface Point's own Normal Volatility, and no decision at all while the Expiry is
+     * still ahead. At Tick 24 the payer is already 9.4bp out of the money, a month before it expires.
+     */
+    @Test
+    void theSwaptionViewCarriesTheStrikeAgainstTheForwardAndNoDecisionYet() {
+        runner("demo").run(context -> {
+            RiskSession session = context.getBean(RiskSession.class);
+            for (int tick = 1; tick <= 24; tick++) {
+                session.step();
+            }
+
+            assertThat(session.snapshot().swaptions()).hasSize(2);
+            assertThat(session.snapshot().swaptions().get(0)).satisfies(payer -> {
+                assertThat(payer.instrumentId()).isEqualTo("SWPN-1Mx5Y-PAY");
+                assertThat(payer.direction()).isEqualTo("PAYER");
+                assertThat(payer.surfacePoint()).isEqualTo("USD 1Mx5Y");
+                assertThat(payer.strike()).isCloseTo(0.048017, within(1e-15));
+                assertThat(payer.expiryDate()).isEqualTo("2026-10-11");
+                assertThat(payer.underlyingMaturityDate()).isEqualTo("2031-10-11");
+                assertThat(payer.normalVolBp()).isCloseTo(95.1397, within(5e-5));
+                assertThat(payer.forwardRate()).isCloseTo(0.0470732, within(5e-8));
+                assertThat(payer.exercised()).as("undecided until the Expiry").isNull();
+            });
+            assertThat(session.snapshot().swaptions().get(1)).satisfies(receiver -> {
+                assertThat(receiver.direction()).isEqualTo("RECEIVER");
+                assertThat(receiver.normalVolBp()).isCloseTo(85.9096, within(5e-5));
+                // The two points are quoted apart, so the panel is showing a surface and not one number.
+                assertThat(receiver.normalVolBp()).isNotEqualTo(95.1397);
+            });
+        });
+    }
+
+    private static double usdVega(PositionResult position) {
+        return position.vega().stream().filter(v -> v.currency().equals("USD"))
+                .mapToDouble(RiskSnapshot.CurrencyAmount::amount).sum();
+    }
+
     @Test
     void everyDemoRunIsIdentical() {
         List<List<RiskUpdate>> runs = new ArrayList<>();
@@ -464,10 +576,17 @@ class DemoProfileTest {
             // The underlying's first floating period starts at the Expiry, and its Fixing was taken there.
             assertThat(market.fixings().on(expiry)).isPresent();
 
-            // Worth nothing, carrying nothing, and still in the Book in the same place.
+            // Worth nothing, carrying nothing, and still in the Book in the same place. The option is
+            // gone, so the risk that was the option's goes with it: no Vega, no Gamma, no DV01.
             PositionResult lapsed = position(session, "P20");
             assertThat(lapsed.value()).isZero();
             assertThat(lapsed.dv01()).isZero();
+            assertThat(lapsed.gamma()).isZero();
+            assertThat(usdVega(lapsed)).isZero();
+            // And the panel now shows what was decided rather than a date still to come.
+            assertThat(session.snapshot().swaptions().get(0).exercised()).isFalse();
+            assertThat(session.snapshot().swaptions().get(1).exercised())
+                    .as("the 1Y receiver has not expired").isNull();
             assertThat(lapsed.instrumentType()).isEqualTo("SWAPTION");
             assertThat(positionIds(session)).isEqualTo(positionsBefore).contains("P20", "P21");
 

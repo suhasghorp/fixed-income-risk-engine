@@ -24,6 +24,8 @@ import java.util.Map;
  * @param credit                 the observable credit market and each issuer's Mark and observations
  * @param swaps                  each interest rate swap's current floating period and its Fixing
  * @param fx                     the FX market and each FX Forward's terms, Fixing and quoted forward
+ * @param swaptions              each Swaption's strike against the forward, its quoted Normal Volatility,
+ *                               and its Exercise Decision once there is one
  */
 public record RiskSnapshot(
         long sequence,
@@ -39,7 +41,8 @@ public record RiskSnapshot(
         List<CtdSwitchEvent> recentCtdSwitches,
         CreditView credit,
         List<SwapView> swaps,
-        FxView fx) {
+        FxView fx,
+        List<SwaptionView> swaptions) {
 
     public static final int MAX_RECENT_LIFECYCLE_EVENTS = 20;
     public static final int MAX_RECENT_CTD_SWITCHES = 20;
@@ -50,6 +53,7 @@ public record RiskSnapshot(
         futures = List.copyOf(futures);
         recentCtdSwitches = List.copyOf(recentCtdSwitches);
         swaps = List.copyOf(swaps);
+        swaptions = List.copyOf(swaptions);
     }
 
     /** Appends new events to the recent ones, keeping only the latest {@code max}. */
@@ -81,7 +85,8 @@ public record RiskSnapshot(
                 update.telemetry(), update.futures(),
                 appendRecent(recentCtdSwitches, update.ctdSwitches(), MAX_RECENT_CTD_SWITCHES), update.credit(),
                 update.swaps() == null ? swaps : update.swaps(),
-                update.fx() == null ? fx : update.fx());
+                update.fx() == null ? fx : update.fx(),
+                update.swaptions() == null ? swaptions : update.swaptions());
     }
 
     /**
@@ -131,6 +136,8 @@ public record RiskSnapshot(
      *                       {@code ratesByCurrency}, and only that splits cleanly
      * @param bucketedDv01   likewise, summed across currencies at each Pillar
      * @param ratesByCurrency one entry per currency the session simulates, in market order
+     * @param gamma          how far that DV01 moves when rates do, across every curve; shown as
+     *                       {@link com.fixedincomerisk.risk.RatesSensitivities#GAMMA_TOTAL_LABEL}
      */
     public record PositionResult(
             String positionId,
@@ -147,7 +154,10 @@ public record RiskSnapshot(
             double dv01,
             List<BucketDv01> bucketedDv01,
             List<CurrencyRates> ratesByCurrency,
+            double gamma,
             double cs01,
+            /** Value change for a 1bp rise in each currency's Normal Volatility; only a Swaption has any. */
+            List<CurrencyAmount> vega,
             /** Value change for a 1% move in each currency against the Reporting Currency. */
             List<CurrencyAmount> fxDelta,
             /** Value change for a one-pip move in each NDF pair's Forward Points, spot held fixed. */
@@ -158,6 +168,7 @@ public record RiskSnapshot(
         public PositionResult {
             bucketedDv01 = List.copyOf(bucketedDv01);
             ratesByCurrency = List.copyOf(ratesByCurrency);
+            vega = List.copyOf(vega);
             fxDelta = List.copyOf(fxDelta);
             pointsDelta = List.copyOf(pointsDelta);
         }
@@ -181,6 +192,8 @@ public record RiskSnapshot(
      * @param bucketedDv01     the same total per Pillar
      * @param ratesByCurrency  the rates risk that does net: one entry per currency, each from bumping that
      *                         currency's curve alone; every currency is listed, even with nothing in it
+     * @param gamma            the Book's DV01 change over the shift, summed from the Positions. Shown as
+     *                         {@value com.fixedincomerisk.risk.RatesSensitivities#GAMMA_TOTAL_LABEL}
      * @param cs01             Book CS01, the sum of Position CS01s
      * @param byInstrumentType totals per Instrument type, for the types held in the Book
      * @param byRatingBucket   totals per Rating Bucket, by each issuer's current rating; every bucket is
@@ -191,7 +204,10 @@ public record RiskSnapshot(
             double dv01,
             List<BucketDv01> bucketedDv01,
             List<CurrencyRates> ratesByCurrency,
+            double gamma,
             double cs01,
+            /** Vega per currency, empty until the Book holds something with optionality in it. */
+            List<CurrencyAmount> vegaByCurrency,
             /** FX Delta per currency. There is deliberately no total: these are different risks. */
             List<CurrencyAmount> fxDeltaByCurrency,
             /** Points delta per NDF pair, reported apart from FX Delta as a future's Basis is from its DV01. */
@@ -202,6 +218,7 @@ public record RiskSnapshot(
         public BookRisk {
             bucketedDv01 = List.copyOf(bucketedDv01);
             ratesByCurrency = List.copyOf(ratesByCurrency);
+            vegaByCurrency = List.copyOf(vegaByCurrency);
             fxDeltaByCurrency = List.copyOf(fxDeltaByCurrency);
             pointsDeltaByPair = List.copyOf(pointsDeltaByPair);
             byInstrumentType = List.copyOf(byInstrumentType);
@@ -213,7 +230,7 @@ public record RiskSnapshot(
      * One currency's rates risk, from bumping that currency's curve alone with every other curve held
      * fixed. This is the unit that nets: a euro basis point and a dollar one are different risks.
      */
-    public record CurrencyRates(String currency, double dv01, List<BucketDv01> bucketedDv01) {
+    public record CurrencyRates(String currency, double dv01, List<BucketDv01> bucketedDv01, double gamma) {
 
         public CurrencyRates {
             bucketedDv01 = List.copyOf(bucketedDv01);
@@ -355,6 +372,31 @@ public record RiskSnapshot(
             String currentPeriodEnd,
             Double currentFixing,
             String nextResetDate) {
+    }
+
+    /**
+     * A Swaption's terms against the market it prices from, so the panel can put the strike next to the
+     * Forward Swap Rate the Exercise Decision turns on, and the quoted volatility next to the Vega.
+     *
+     * @param direction     PAYER or RECEIVER: the side the underlying swap would be entered on
+     * @param surfacePoint  the one point it prices from, e.g. "USD 1Mx5Y"
+     * @param normalVolBp   that point's Normal Volatility, in basis points per annum
+     * @param forwardRate   the underlying's Forward Swap Rate, or null once there is nothing left to
+     *                      project it from — a lapsed option's swap never starts, so its Fixings stop
+     *                      being recorded and eventually the rate has no meaning rather than a wrong value
+     * @param exercised     the Exercise Decision, or null while the Expiry is still ahead
+     */
+    public record SwaptionView(
+            String instrumentId,
+            String description,
+            String direction,
+            String surfacePoint,
+            double strike,
+            String expiryDate,
+            String underlyingMaturityDate,
+            double normalVolBp,
+            Double forwardRate,
+            Boolean exercised) {
     }
 
     /** DV01 for a 1bp bump at one Pillar, fading to zero at the neighbouring Pillars. */

@@ -10,7 +10,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { RATES_TOTAL_LABEL, type BookRisk } from '../api/riskSnapshot';
+import { GAMMA_LABEL, GAMMA_TOTAL_LABEL, RATES_TOTAL_LABEL, type BookRisk } from '../api/riskSnapshot';
 import { formatDv01, formatMoney } from '../format';
 
 const INSTRUMENT_TYPE_LABEL: Record<string, string> = {
@@ -56,8 +56,11 @@ export function BookRiskPanel({ bookRisk }: { bookRisk: BookRisk }) {
       <header className="card-header">
         <h2>Book risk</h2>
         <p className="muted">
-          USD per 1bp fall, on dirty value: DV01 in zero rates, CS01 in issuer Marks. Rates risk is measured one curve at a
-          time; the headline adds a basis point of each. Positive risk gains as rates or spreads fall.
+          USD per 1bp fall, on dirty value: DV01 in zero rates, CS01 in issuer Marks, Vega per 1bp <em>rise</em> in a
+          Surface Point's Normal Volatility. Rates risk is measured one curve at a time; the headline adds a basis point
+          of each. Positive risk gains as rates or spreads fall. Gamma is not a first derivative at all — it is the{' '}
+          <em>{GAMMA_LABEL}</em>, how far the DV01 beside it moves when rates do, which is why it never appears without
+          that shift attached.
         </p>
       </header>
       <div className="risk-grid">
@@ -73,13 +76,28 @@ export function BookRiskPanel({ bookRisk }: { bookRisk: BookRisk }) {
               <span className={`stat-value num ${bookRisk.cs01 < 0 ? 'short' : ''}`}>{formatDv01(bookRisk.cs01)}</span>
               <span className="muted">1bp on every Mark</span>
             </div>
+            <div className="stat">
+              <span className="stat-label">Book Gamma</span>
+              <span className={`stat-value num ${bookRisk.gamma < 0 ? 'short' : ''}`}>{formatDv01(bookRisk.gamma)}</span>
+              <span className="muted">{GAMMA_TOTAL_LABEL}</span>
+            </div>
+            {bookRisk.vegaByCurrency.map((v) => (
+              <div className="stat" key={v.currency}>
+                <span className="stat-label">Book Vega</span>
+                <span className={`stat-value num ${v.amount < 0 ? 'short' : ''}`}>{formatDv01(v.amount)}</span>
+                <span className="muted">1bp of {v.currency} Normal Vol</span>
+              </div>
+            ))}
           </div>
           <table className="compact">
-            <caption className="muted">DV01 by currency (that curve bumped 1bp, the others held fixed)</caption>
+            <caption className="muted">
+              DV01 and Gamma by currency (that curve bumped, the others held fixed). Gamma is the {GAMMA_LABEL}.
+            </caption>
             <thead>
               <tr>
                 <th>Currency</th>
                 <th className="num">DV01</th>
+                <th className="num">Gamma</th>
               </tr>
             </thead>
             <tbody>
@@ -87,6 +105,7 @@ export function BookRiskPanel({ bookRisk }: { bookRisk: BookRisk }) {
                 <tr key={c.currency} className={c.dv01 === 0 ? 'muted' : undefined}>
                   <td>{c.currency}</td>
                   <td className={`num ${c.dv01 < 0 ? 'short' : ''}`}>{formatDv01(c.dv01)}</td>
+                  <td className={`num ${c.gamma < 0 ? 'short' : ''}`}>{c.gamma === 0 ? '—' : formatDv01(c.gamma)}</td>
                 </tr>
               ))}
             </tbody>

@@ -6,6 +6,8 @@ import com.fixedincomerisk.curve.CurveSource;
 import com.fixedincomerisk.instrument.FxForward;
 import com.fixedincomerisk.instrument.FxNdf;
 import com.fixedincomerisk.instrument.Instrument;
+import com.fixedincomerisk.instrument.InterestRateSwap;
+import com.fixedincomerisk.instrument.Swaption;
 import com.fixedincomerisk.market.FxPair;
 import com.fixedincomerisk.market.MarketState;
 import com.fixedincomerisk.market.RiskFactorId;
@@ -29,12 +31,14 @@ import com.fixedincomerisk.session.RiskSnapshot.LifecycleEvent;
 import com.fixedincomerisk.session.RiskSnapshot.PositionResult;
 import com.fixedincomerisk.session.RiskSnapshot.RepricingTelemetry;
 import com.fixedincomerisk.session.RiskSnapshot.SessionInfo;
+import com.fixedincomerisk.session.RiskSnapshot.SwaptionView;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -157,14 +161,53 @@ public final class RiskSession implements AutoCloseable {
                 new RiskUpdate.CurveChange(latest.curve().pillars(), latest.curve().points()),
                 ticks.lifecycleEvents(), telemetry, latest.futures(), ticks.ctdSwitches(), latest.credit(),
                 ticks.dayRollover() ? latest.swaps() : null,
-                fxView(latest.market()));
+                fxView(latest.market()), swaptionViews(latest.market()));
     }
 
     /** Pricing side: a complete picture as of the latest priced cycle. */
     public RiskSnapshot snapshot() {
         return new RiskSnapshot(sequence, priced.tick(), priced.ticksUntilDayRollover(), sessionInfo(),
                 List.copyOf(positions.values()), bookRisk, priced.curve(), recentLifecycleEvents, telemetry,
-                priced.futures(), recentCtdSwitches, priced.credit(), priced.swaps(), fxView(priced.market()));
+                priced.futures(), recentCtdSwitches, priced.credit(), priced.swaps(), fxView(priced.market()),
+                swaptionViews(priced.market()));
+    }
+
+    /**
+     * Each Swaption's terms against the market it prices from: the strike beside the Forward Swap Rate the
+     * Exercise Decision turns on, its own Surface Point's Normal Volatility, and the decision once there
+     * is one. It rides every Risk Update, because the vol and the forward both move every Tick.
+     */
+    private List<SwaptionView> swaptionViews(MarketState market) {
+        List<SwaptionView> views = new ArrayList<>();
+        for (Instrument instrument : instruments) {
+            if (instrument instanceof Swaption swaption) {
+                views.add(new SwaptionView(swaption.id(), swaption.description(),
+                        swaption.isPayer() ? "PAYER" : "RECEIVER", swaption.surfacePoint().label(),
+                        swaption.strike(), swaption.expiryDate().toString(),
+                        swaption.underlying().maturityDate().toString(),
+                        market.vols().normalVol(swaption.surfacePoint().label()) * 1e4,
+                        forwardRate(swaption, market),
+                        market.exercises().on(swaption.id(), swaption.expiryDate()).orElse(null)));
+            }
+        }
+        return views;
+    }
+
+    /**
+     * The underlying's Forward Swap Rate, or null when there is nothing left to project it from. A lapsed
+     * option's swap never starts, so no Fixing is recorded for it after the Expiry's own; past that first
+     * floating period the rate has no meaning, and saying so beats printing a number that has none.
+     */
+    private static Double forwardRate(Swaption swaption, MarketState market) {
+        InterestRateSwap underlying = swaption.underlying();
+        if (underlying.annuity(market) <= 0) {
+            return null;
+        }
+        Optional<InterestRateSwap.Period> current = underlying.currentFloatingPeriod(market.valuationDate());
+        if (current.isPresent() && market.fixings().on(current.get().start()).isEmpty()) {
+            return null;
+        }
+        return underlying.forwardRate(market);
     }
 
     /** The FX market behind the Book's FX Positions, and each contract's terms against today's forward. */
@@ -285,12 +328,13 @@ public final class RiskSession implements AutoCloseable {
         double accrued = instrument.accruedInterest(market.valuationDate());
         RatesSensitivities perUnit = sensitivities.ratesSensitivities(instrument, market);
         double cs01 = sensitivities.cs01(instrument, market);
+        Map<String, Double> vega = sensitivities.vega(instrument, market, config.surfacePoints());
         Map<String, Double> fxDelta = sensitivities.fxDelta(instrument, market, config.fxPairs());
         Map<String, Double> pointsDelta = sensitivities.pointsDelta(instrument, market, config.fxPairs());
         Set<RiskFactorId> dependencies = MaterialDependencies.of(instrument.riskFactors(market, config.pillars()),
                 config.pillars(), perUnit, config.repricing().minPillarExposure());
         return new Priced(instrument, dependencies,
-                new InstrumentResult(dirty, accrued, perUnit, cs01, fxDelta, pointsDelta, tick));
+                new InstrumentResult(dirty, accrued, perUnit, cs01, vega, fxDelta, pointsDelta, tick));
     }
 
     private PositionResult positionResult(Position position, MarketState market) {
@@ -311,7 +355,9 @@ public final class RiskSession implements AutoCloseable {
                 risk.totalDv01(),
                 BookRollups.bucketDv01s(config.pillars(), risk.totalBucketedDv01()),
                 ratesByCurrency(risk),
+                risk.totalGamma(),
                 result.cs01() * position.quantity() + 0.0,
+                scaled(result.vega(), position.quantity(), CurrencyAmount::new),
                 scaled(result.fxDelta(), position.quantity(), CurrencyAmount::new),
                 scaled(result.pointsDelta(), position.quantity(), PairAmount::new),
                 instrument.issuer().map(issuer -> market.credit().rating(issuer)).orElse(null),
@@ -331,7 +377,7 @@ public final class RiskSession implements AutoCloseable {
         risk.currencies().forEach(currency -> {
             CurveSensitivities inCurrency = risk.in(currency);
             rates.add(new CurrencyRates(currency, inCurrency.dv01(),
-                    BookRollups.bucketDv01s(config.pillars(), inCurrency.bucketedDv01())));
+                    BookRollups.bucketDv01s(config.pillars(), inCurrency.bucketedDv01()), inCurrency.gamma()));
         });
         return rates;
     }
@@ -371,7 +417,8 @@ public final class RiskSession implements AutoCloseable {
 
     /** One Instrument's per-unit price and risk, as of the Tick it was last priced. */
     private record InstrumentResult(double dirty, double accrued, RatesSensitivities perUnit, double cs01,
-                                    Map<String, Double> fxDelta, Map<String, Double> pointsDelta, long tick) {
+                                    Map<String, Double> vega, Map<String, Double> fxDelta,
+                                    Map<String, Double> pointsDelta, long tick) {
     }
 
     /** The outcome of pricing one Instrument, before it is applied to the session's state. */

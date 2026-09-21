@@ -136,7 +136,13 @@ public record Swaption(String id, LocalDate expiryDate, SurfacePoint surfacePoin
                         market.vols().normalVol(surfacePoint.label()), yearsToExpiry(market));
     }
 
-    /** Vega per 1bp of this option's Surface Point, per unit of notional. Zero once there is no time left. */
+    /**
+     * Vega per 1bp of this option's Surface Point, per unit of notional. Zero once there is no time left.
+     *
+     * <p>The <em>closed form</em>. It is not what the engine reports: {@code SensitivityCalculator} bumps
+     * the Surface Point and reprices, the same definition every other sensitivity here uses, and this is
+     * the independent number that measurement is checked against.
+     */
     public double vegaPerBasisPoint(MarketState market) {
         if (!market.valuationDate().isBefore(expiryDate)) {
             return 0;

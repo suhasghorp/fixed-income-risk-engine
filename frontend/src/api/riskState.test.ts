@@ -11,6 +11,7 @@ import {
   type RepricingTelemetry,
   type RiskUpdate,
   type SwapView,
+  type SwaptionView,
 } from './riskSnapshot';
 
 const position = (positionId: string, dirtyPrice: number): PositionResult => ({
@@ -26,8 +27,12 @@ const position = (positionId: string, dirtyPrice: number): PositionResult => ({
   value: dirtyPrice * 10_000,
   dv01: dirtyPrice,
   bucketedDv01: [{ pillar: '2Y', years: 2, dv01: dirtyPrice }],
-  ratesByCurrency: [{ currency: 'USD', dv01: dirtyPrice, bucketedDv01: [{ pillar: '2Y', years: 2, dv01: dirtyPrice }] }],
+  ratesByCurrency: [
+    { currency: 'USD', dv01: dirtyPrice, bucketedDv01: [{ pillar: '2Y', years: 2, dv01: dirtyPrice }], gamma: -1 },
+  ],
+  gamma: -1,
   cs01: 0,
+  vega: [{ currency: 'USD', amount: 0 }],
   fxDelta: [],
   pointsDelta: [],
   ratingBucket: null,
@@ -67,8 +72,10 @@ const bookRisk = (dv01: number): BookRisk => ({
   value: dv01 * 10_000,
   dv01,
   bucketedDv01: [{ pillar: '2Y', years: 2, dv01 }],
-  ratesByCurrency: [{ currency: 'USD', dv01, bucketedDv01: [{ pillar: '2Y', years: 2, dv01 }] }],
+  ratesByCurrency: [{ currency: 'USD', dv01, bucketedDv01: [{ pillar: '2Y', years: 2, dv01 }], gamma: -2 }],
+  gamma: -2,
   cs01: 0,
+  vegaByCurrency: [{ currency: 'USD', amount: 7_117 }],
   fxDeltaByCurrency: [{ currency: 'EUR', amount: 0 }],
   pointsDeltaByPair: [{ pair: 'USDKRW', amount: 0 }],
   byInstrumentType: [{ instrumentType: 'TREASURY_BOND', positionCount: 2, value: dv01 * 10_000, dv01, cs01: 0 }],
@@ -129,7 +136,24 @@ const snapshot = (sequence: number): RiskSnapshot => ({
   recentCtdSwitches: [],
   credit: credit(95),
   swaps: [swapView(0.043)],
+  swaptions: [swaptionView(null)],
 });
+
+/** Undecided while the Expiry is ahead; once decided the same row carries the decision instead. */
+function swaptionView(exercised: boolean | null): SwaptionView {
+  return {
+    instrumentId: 'SWPN-1Mx5Y-PAY',
+    description: 'Payer 1Mx5Y swaption at 4.802%, expires 10/11/2026',
+    direction: 'PAYER',
+    surfacePoint: 'USD 1Mx5Y',
+    strike: 0.048017,
+    expiryDate: '2026-10-11',
+    underlyingMaturityDate: '2031-10-11',
+    normalVolBp: 95.14,
+    forwardRate: 0.0470732,
+    exercised,
+  };
+}
 
 function swapView(currentFixing: number): SwapView {
   return {
@@ -162,6 +186,7 @@ const update = (sequence: number, overrides: Partial<RiskUpdate> = {}): RiskUpda
   ctdSwitches: [],
   credit: credit(95 + sequence / 10),
   swaps: null,
+  swaptions: null,
   ...overrides,
 });
 
@@ -259,6 +284,15 @@ describe('applyRiskMessage', () => {
 
     state = applyRiskMessage(state, { type: 'risk-update', update: update(3, { valuationDate: '2026-10-15', swaps: [swapView(0.041)] }) });
     expect(state.snapshot?.swaps).toEqual([swapView(0.041)]);
+  });
+
+  it('keeps the Swaptions until an update carries new ones, then takes the Exercise Decision', () => {
+    let state = applyRiskMessage(withSnapshot(1), { type: 'risk-update', update: update(2) });
+    expect(state.snapshot?.swaptions).toEqual([swaptionView(null)]);
+
+    // The decision is recorded once, on the Expiry, and the same row shows it from then on.
+    state = applyRiskMessage(state, { type: 'risk-update', update: update(3, { swaptions: [swaptionView(false)] }) });
+    expect(state.snapshot?.swaptions[0].exercised).toBe(false);
   });
 
   it('ignores stale and duplicate Risk Updates', () => {

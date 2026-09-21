@@ -62,6 +62,7 @@ function applyUpdate(snapshot: RiskSnapshot, update: RiskUpdate): RiskSnapshot {
     credit: update.credit,
     swaps: update.swaps ?? snapshot.swaps,
     fx: update.fx ?? snapshot.fx,
+    swaptions: update.swaptions ?? snapshot.swaptions,
   };
 }
 
