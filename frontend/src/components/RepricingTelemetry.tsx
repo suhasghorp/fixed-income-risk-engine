@@ -6,6 +6,9 @@ const FACTOR_LABEL: Record<string, string> = {
   SYSTEMIC: 'Systemic Factor',
   SECTOR: 'Sector Factor',
   BASIS: 'Basis',
+  FX_SPOT: 'FX Spot',
+  NDF_POINTS: 'Forward Points',
+  NORMAL_VOL: 'Normal Volatility',
 };
 
 const twoDecimals = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
